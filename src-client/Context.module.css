@@ -620,3 +620,8 @@
 .graphDense .nodeCompact circle { filter: none !important; }
 .graphDense .nodeCompactLabel { paint-order: normal; stroke: none; }
 .graphDense .node rect { filter: none; }
+
+/* 大图渲染上限提示 */
+.renderCap{display:inline-flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary);}
+.linkButton{border:0;background:transparent;padding:0;color:var(--dsw-alias-brand-primary);font:inherit;font-size:10.5px;text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
+.linkButton:hover{color:var(--dsw-alias-label-primary);}

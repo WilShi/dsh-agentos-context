@@ -50,6 +50,7 @@ const typeLabels: Record<string, string> = {
 const VIEW_WIDTH = 960,
   VIEW_HEIGHT = 500,
   COMMUNITY_THRESHOLD = 12
+const NODE_RENDER_CAP = 240
 type GraphMode = 'overview' | 'workbench'
 type GraphDimension = '2d' | '3d'
 type Selected = { kind: 'node' | 'edge' | 'community'; id: string } | null
@@ -447,11 +448,21 @@ export function ContextGraph({
     return { left: `${Math.max(4, Math.min(88, ((point.x - x) / width) * 100))}%`, top: `${Math.max(4, Math.min(84, ((point.y - y) / height) * 100))}%` }
   },
     degrees = useMemo(() => graphDegrees(graph), [graph])
+  const [showAllNodes, setShowAllNodes] = useState(false)
+  const visibleNodeIds = useMemo(() => {
+    const all = (graph?.nodes ?? []).filter(node => layerVisible(node))
+    if (showCommunities || showAllNodes || all.length <= NODE_RENDER_CAP) return new Set(all.map(node => node.id))
+    const ranked = [...all].sort((left, right) => (degrees.get(right.id) ?? 0) - (degrees.get(left.id) ?? 0) || left.id.localeCompare(right.id))
+    const keep = new Set(ranked.slice(0, NODE_RENDER_CAP).map(node => node.id))
+    if (selected?.kind === 'node') keep.add(selected.id)
+    return keep
+  }, [graph, layerVisible, showCommunities, showAllNodes, degrees, selected])
+  useEffect(() => { setShowAllNodes(false) }, [graph])
   const labelLayout = useMemo(() => {
       const layout = new Map<string, { x: number; y: number; text: string }>()
       if (!graph) return layout
       const entries = [...graph.nodes]
-        .filter(node => node.type !== 'community' && layerVisible(node))
+        .filter(node => node.type !== 'community' && layerVisible(node) && visibleNodeIds.has(node.id))
         .sort((left, right) => (degrees.get(right.id) ?? 0) - (degrees.get(left.id) ?? 0) || left.id.localeCompare(right.id))
         .slice(0, 18)
       const occupied: number[][] = []
@@ -477,7 +488,7 @@ export function ContextGraph({
         }
       }
       return layout
-    }, [graph, positions, degrees, layerVisible]),
+    }, [graph, positions, degrees, layerVisible, visibleNodeIds]),
     nodeById = useMemo(
       () => new Map(graph?.nodes.map(node => [node.id, node]) ?? []),
       [graph],
@@ -948,6 +959,14 @@ export function ContextGraph({
               当前筛选显示 {graph.nodes.length} 个节点、{graph.edges.length} 条关系
             </span>
           ) : null}
+          {!showCommunities && graph.nodes.length > NODE_RENDER_CAP ? (
+            <span className={styles.renderCap}>
+              已渲染 {visibleNodeIds.size}/{graph.nodes.filter(layerVisible).length} 个节点
+              <button type="button" className={styles.linkButton} onClick={() => setShowAllNodes(value => !value)}>
+                {showAllNodes ? '恢复默认上限（更快）' : '显示全部（可能变慢）'}
+              </button>
+            </span>
+          ) : null}
           {state.data.stats.truncated ? (
             <strong>
               数据量已达到本次加载上限
@@ -1034,6 +1053,7 @@ export function ContextGraph({
                       if (!a || !b) return null
                       const sourceNode = nodeById.get(edge.source), targetNode = nodeById.get(edge.target)
                       if (!sourceNode || !targetNode) return null
+                      if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) return null
                       if (!layerVisible(sourceNode) || !layerVisible(targetNode)) return null
                       const dx = b.x - a.x, dy = b.y - a.y
                       const length = Math.max(1, Math.hypot(dx, dy))
@@ -1069,7 +1089,7 @@ export function ContextGraph({
                         </g>
                       )
                     })}
-                    {graph.nodes.filter(layerVisible).map((node) => {
+                    {graph.nodes.filter(node => layerVisible(node) && visibleNodeIds.has(node.id)).map((node) => {
                       const point = positions.get(node.id)!
                       const active = selected?.id === node.id
                       const highlightedNode = highlighted.nodeIds.has(node.id)
