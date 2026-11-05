@@ -45,7 +45,7 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   const styleTags = [
     ...document.querySelectorAll<HTMLStyleElement>(
-      'style[data-plugin="@deepseek/dsh-agentos-context"]',
+      'style[data-plugin="@wilshi/dsh-agentos-context"]',
     ),
   ]
   for (const tag of styleTags)

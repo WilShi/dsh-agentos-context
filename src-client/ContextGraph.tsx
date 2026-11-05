@@ -18,6 +18,8 @@ import {
   useLoad,
 } from './context-ui-helpers.tsx'
 import { ContextGraph3D } from './ContextGraph3D.tsx'
+import { useForceLayout } from './graph-force.ts'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { GraphLayoutMode, GraphSelectIntent } from './ContextGraph3D.tsx'
 import {
   exploreGraph,
@@ -30,6 +32,7 @@ import styles from './Context.module.css'
 
 const LAYERS: MemoryLayer[] = ['working', 'episodic', 'semantic', 'procedural']
 const EDGE_LABEL: Record<string, string> = { summarizes: '摘要归纳', supersedes: '修订', references: '引用', mentions: '提及', source: '来源', session: '同会话', relation: '关系' }
+const GLYPHS: Record<string, string> = { working: '◆', episodic: '●', semantic: '■', procedural: '▲', entity: '◇', document: '▣', source: '○', summary: '✦', community: '◉' }
 const TONE_LABELS: Record<string, string> = { working: '工作记忆', episodic: '情节记忆', semantic: '语义记忆', procedural: '程序记忆', entity: '对象', document: '知识文档', source: '来源证据', summary: '摘要', community: '社区' }
 function nodeTone(node: { type: string; layer?: string; subtype?: string }): string {
   if (node.type !== 'memory') return node.type
@@ -82,6 +85,17 @@ function rememberDimension(value: GraphDimension) {
   }
 }
 
+function convexHull(points: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+  if (points.length < 3) return points
+  const sorted = [...points].sort((left, right) => left.x - right.x || left.y - right.y)
+  const cross = (origin: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) => (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x)
+  const lower: Array<{ x: number; y: number }> = []
+  for (const point of sorted) { while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, point) <= 0) lower.pop(); lower.push(point) }
+  const upper: Array<{ x: number; y: number }> = []
+  for (let index = sorted.length - 1; index >= 0; index -= 1) { const point = sorted[index]!; while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, point) <= 0) upper.pop(); upper.push(point) }
+  upper.pop(); lower.pop()
+  return lower.concat(upper)
+}
 function graphPositions(
   graph: VisualGraph | undefined,
 ): Map<string, { x: number; y: number }> {
@@ -159,15 +173,9 @@ function graphDegrees(graph: VisualGraph | undefined): Map<string, number> {
 }
 
 function compactNodeRadius(node: VisualNode, degree: number): number {
-  const base =
-    node.type === 'community'
-      ? 12
-      : node.type === 'entity'
-        ? 8
-        : node.type === 'source'
-          ? 5
-          : 6.5
-  return base + Math.min(5, Math.sqrt(Math.max(0, degree)) * 1.4)
+  if (node.type === 'community') return 20
+  const tier = degree >= 5 ? 21 : degree >= 2 ? 14 : 8
+  return tier + (node.importance ?? 0.5) * 2
 }
 function displayLabel(value: string): string {
   return value
@@ -312,6 +320,17 @@ export function ContextGraph({
 }) {
   const overview = mode === 'overview'
   const graphHost = useRef<HTMLDivElement>(null)
+  const [viewportSize, setViewportSize] = useState({ width: 960, height: 420 })
+  useEffect(() => {
+    const element = graphHost.current
+    if (!element) return
+    const update = () => setViewportSize({ width: Math.max(320, element.clientWidth || 960), height: Math.max(280, element.clientHeight || 420) })
+    update()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => update())
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
   const fullscreenRequested = useRef(false)
   const pathAnchorId = useRef<string | null>(null)
   const [rootId, setRootId] = useState(''),
@@ -326,9 +345,7 @@ export function ContextGraph({
     [known, setKnown] = useState(''),
     [valid, setValid] = useState(''),
     [selected, setSelected] = useState<Selected>(null),
-    [viewMode, setViewMode] = useState<'auto' | 'communities' | 'nodes'>(
-      'auto',
-    ),
+    [viewMode, setViewMode] = useState<'auto' | 'communities' | 'nodes'>('nodes'),
     [expanded, setExpanded] = useState<Set<string>>(() => new Set()),
     [dimension, setDimension] = useState<GraphDimension>(savedDimension),
     [layerFilter, setLayerFilter] = useState<MemoryLayer | null>(null),
@@ -421,7 +438,36 @@ export function ContextGraph({
       () => [...new Set(state.data?.nodes.map(node => node.scopeId) ?? [])].sort(),
       [state.data],
     )
-  const positions = useMemo(() => graphPositions(graph), [graph]),
+  const degrees = useMemo(() => graphDegrees(graph), [graph])
+  const radiusById = useMemo(
+    () => new Map((graph?.nodes ?? []).map(node => [node.id, compactNodeRadius(node, degrees.get(node.id) ?? 0) + 8] as const)),
+    [graph, degrees],
+  )
+  const hubThreshold = useMemo(() => {
+    const values = [...degrees.values()].sort((left, right) => right - left)
+    return Math.max(4, values[Math.min(values.length - 1, Math.floor(values.length * 0.15))] ?? 4)
+  }, [degrees])
+  const force = useForceLayout(
+    (graph?.nodes ?? []).map(node => ({ id: node.id, communityId: node.communityId ?? node.community?.id, scopeId: node.scopeId })),
+    (graph?.edges ?? []).map(edge => ({ source: edge.source, target: edge.target })),
+    { radiusOf: node => radiusById.get(node.id) ?? 10 },
+  )
+  const fittedPositions = useMemo(() => {
+    const points = [...force.positions.values()]
+    if (points.length === 0) return force.positions
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const point of points) { minX = Math.min(minX, point.x); minY = Math.min(minY, point.y); maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y) }
+    const cx = (minX + maxX) / 2
+    const contentAspect = Math.max(0.2, (maxX - minX) / Math.max(1, maxY - minY))
+    const targetAspect = Math.max(0.6, viewportSize.width / Math.max(1, viewportSize.height))
+    const stretchX = Math.max(1, Math.min(2.1, targetAspect / contentAspect))
+    const stretchY = Math.max(1, Math.min(1.8, 200 / Math.max(60, maxY - minY)))
+    const result = new Map<string, { x: number; y: number }>()
+    const cy = (minY + maxY) / 2
+    for (const [id, point] of force.positions) result.set(id, { x: cx + (point.x - cx) * stretchX, y: cy + (point.y - cy) * stretchY })
+    return result
+  }, [force.positions, viewportSize])
+  const positions = fittedPositions,
     layerVisible = useMemo(() => (node: VisualNode) => {
     if (layerFilter === null) return true
     if (node.type !== 'memory') return true
@@ -432,22 +478,24 @@ export function ContextGraph({
     const points = [...positions.values()]
     if (points.length === 0) return `0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    for (const point of points) {
-      minX = Math.min(minX, point.x); minY = Math.min(minY, point.y)
-      maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y)
-    }
-    const hasCommunities = [...(graph?.nodes ?? [])].some(node => node.type === 'community')
-    const padX = 150
-    const padTop = 120
-    const padBottom = hasCommunities ? 210 : 130
-    return (minX - padX) + ' ' + (minY - padTop) + ' ' + Math.max(320, maxX - minX + padX * 2) + ' ' + Math.max(220, maxY - minY + padTop + padBottom)
-  }, [positions]),
+    for (const point of points) { minX = Math.min(minX, point.x); minY = Math.min(minY, point.y); maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y) }
+    const pad = 70
+    const cx = (minX + maxX) / 2
+    const cy = (minY + maxY) / 2
+    const contentWidth = Math.max(360, maxX - minX + pad * 2)
+    const contentHeight = Math.max(240, maxY - minY + pad * 2)
+    const aspect = Math.max(0.4, viewportSize.width / viewportSize.height)
+    let width = contentWidth, height = contentHeight
+    if (contentWidth / contentHeight > aspect) height = contentWidth / aspect
+    else width = contentHeight * aspect
+    width /= 0.85; height /= 0.85
+    return (cx - width / 2) + ' ' + (cy - height / 2) + ' ' + width + ' ' + height
+  }, [positions, viewportSize]),
     viewBoxParts = useMemo(() => viewBox.split(' ').map(Number), [viewBox]),
     hoverPercent = (point: { x: number; y: number }) => {
     const [x = 0, y = 0, width = VIEW_WIDTH, height = VIEW_HEIGHT] = viewBoxParts
     return { left: `${Math.max(4, Math.min(88, ((point.x - x) / width) * 100))}%`, top: `${Math.max(4, Math.min(84, ((point.y - y) / height) * 100))}%` }
-  },
-    degrees = useMemo(() => graphDegrees(graph), [graph])
+  }
   const [showAllNodes, setShowAllNodes] = useState(false)
   const visibleNodeIds = useMemo(() => {
     const all = (graph?.nodes ?? []).filter(node => layerVisible(node))
@@ -458,20 +506,91 @@ export function ContextGraph({
     return keep
   }, [graph, layerVisible, showCommunities, showAllNodes, degrees, selected])
   useEffect(() => { setShowAllNodes(false) }, [graph])
+  const communityHulls = useMemo(() => {
+    if (showCommunities) return [] as Array<{ id: string; label: string; count: number; d: string; x: number; y: number; chipWidth: number }>
+    const communityLabels = new Map<string, string>()
+    for (const node of graph?.nodes ?? []) if (node.type === 'community' && node.label) communityLabels.set(node.id, node.label)
+    const groups = new Map<string, { label: string; scopeId: string; nodes: VisualNode[] }>()
+    for (const node of graph?.nodes ?? []) {
+      if (node.type === 'community') continue
+      const key = node.communityId ?? node.scopeId ?? 'all'
+      const bucket = groups.get(key) ?? { label: '', scopeId: node.scopeId, nodes: [] }
+      bucket.nodes.push(node)
+      const communityLabel = communityLabels.get(key) ?? (node as VisualNode).community?.label
+      if (!bucket.label && communityLabel) bucket.label = communityLabel
+      groups.set(key, bucket)
+    }
+    const hulls: Array<{ id: string; label: string; count: number; d: string; x: number; y: number; chipWidth: number }> = []
+    let index = 0
+    for (const [id, group] of groups) {
+      const points = group.nodes.filter(node => visibleNodeIds.has(node.id)).map(node => positions.get(node.id)).filter((point): point is { x: number; y: number } => point !== undefined)
+      if (points.length < 3) continue
+      const hull = convexHull(points)
+      if (hull.length < 3) continue
+      const cx = points.reduce((sum, point) => sum + point.x, 0) / points.length
+      const cy = points.reduce((sum, point) => sum + point.y, 0) / points.length
+      const padded = hull.map(point => { const dx = point.x - cx; const dy = point.y - cy; const length = Math.max(1, Math.hypot(dx, dy)); return { x: point.x + (dx / length) * 26, y: point.y + (dy / length) * 26 } })
+      const d = padded.map((point, pointIndex) => (pointIndex === 0 ? 'M' : 'L') + point.x.toFixed(1) + ' ' + point.y.toFixed(1)).join(' ') + ' Z'
+      const minY = Math.min(...padded.map(point => point.y))
+      const maxY = Math.max(...padded.map(point => point.y))
+      let label = group.label
+      if (!label) {
+        try { label = formatScopeLabel(group.scopeId) } catch { label = '' }
+      }
+      if (!label || label.includes("scope:") || label.includes("%")) {
+        const raw = group.scopeId ?? id
+        const text = raw.includes("scope:") ? raw.slice(raw.indexOf("scope:") + 6) : raw
+        try { label = decodeURIComponent(text) } catch { label = text }
+      }
+      if (!label || label.length > 16 || label.includes("/")) label = `社区 ${index + 1}`
+      const chipWidth = Array.from(label).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 10 : 6), 0) + 20
+      const labelY = minY - 18
+      hulls.push({ id, label, count: group.nodes.length, d, x: cx, y: labelY, chipWidth })
+      index += 1
+    }
+    return hulls  }, [graph, positions, visibleNodeIds, showCommunities])
+  const svgRef = useRef<SVGSVGElement>(null)
+  const draggingRef = useRef<string | null>(null)
+  const screenToGraph = (event: { clientX: number; clientY: number }) => {
+    const svg = svgRef.current
+    if (!svg) return null
+    const matrix = svg.getScreenCTM()
+    if (!matrix) return null
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse())
+    return { x: point.x, y: point.y }
+  }
+  const startDrag = (event: ReactPointerEvent<SVGGElement>, node: VisualNode) => {
+    if (event.button !== 0) return
+    const point = screenToGraph(event)
+    if (!point) return
+    draggingRef.current = node.id
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    force.dragTo(node.id, point)
+    event.stopPropagation()
+  }
+  const moveDrag = (event: ReactPointerEvent<SVGElement>) => {
+    if (!draggingRef.current) return
+    const point = screenToGraph(event)
+    if (point) force.dragTo(draggingRef.current, point)
+  }
+  const endDrag = () => {
+    if (draggingRef.current) force.release(draggingRef.current)
+    draggingRef.current = null
+  }
   const labelLayout = useMemo(() => {
       const layout = new Map<string, { x: number; y: number; text: string }>()
       if (!graph) return layout
       const entries = [...graph.nodes]
         .filter(node => node.type !== 'community' && layerVisible(node) && visibleNodeIds.has(node.id))
         .sort((left, right) => (degrees.get(right.id) ?? 0) - (degrees.get(left.id) ?? 0) || left.id.localeCompare(right.id))
-        .slice(0, 18)
+        .slice(0, zoom < 0.8 ? Math.min(6, Math.max(3, Math.ceil((graph?.nodes.length ?? 0) * 0.15))) : zoom > 1.5 ? Math.min(60, graph?.nodes.length ?? 0) : Math.min(12, Math.max(6, Math.ceil((graph?.nodes.length ?? 0) * 0.4))))
       const occupied: number[][] = []
       for (const node of entries) {
         const point = positions.get(node.id)
         if (!point) continue
         const radius = compactNodeRadius(node, degrees.get(node.id) ?? 0)
         const text = shortLabel(node.label, 14)
-        const width = Math.min(190, [...text].length * 6.4 + 4)
+        const width = Math.min(210, Array.from(text).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 9 : 6), 0) + 6)
         const candidates = [
           { x: point.x + radius + 6, y: point.y + 4 },
           { x: point.x - radius - 6 - width, y: point.y + 4 },
@@ -479,7 +598,7 @@ export function ContextGraph({
           { x: point.x - width / 2, y: point.y + radius + 16 },
         ]
         for (const candidate of candidates) {
-          const rect = [candidate.x, candidate.y - 9, candidate.x + width, candidate.y + 3]
+          const rect = [candidate.x - 4, candidate.y - 12, candidate.x + width + 4, candidate.y + 6]
           const blocked = occupied.some(other => rect[0]! < other[2]! && rect[2]! > other[0]! && rect[1]! < other[3]! && rect[3]! > other[1]!)
           if (blocked) continue
           occupied.push(rect)
@@ -488,7 +607,7 @@ export function ContextGraph({
         }
       }
       return layout
-    }, [graph, positions, degrees, layerVisible, visibleNodeIds]),
+    }, [graph, positions, degrees, layerVisible, visibleNodeIds, zoom]),
     nodeById = useMemo(
       () => new Map(graph?.nodes.map(node => [node.id, node]) ?? []),
       [graph],
@@ -563,7 +682,7 @@ export function ContextGraph({
   useEffect(() => {
     setExpanded(new Set())
     setSelected(null)
-    setViewMode('auto')
+    setViewMode('nodes')
     setFilter('')
     setNodeType('all')
     setEdgeType('all')
@@ -1025,6 +1144,10 @@ export function ContextGraph({
               ) : (
                 <>
                 <svg
+                  ref={svgRef}
+                  onPointerMove={moveDrag}
+                  onPointerUp={endDrag}
+                  onPointerLeave={endDrag}
                   viewBox={viewBox}
                   preserveAspectRatio="xMidYMid meet"
                   role="img"
@@ -1048,6 +1171,12 @@ export function ContextGraph({
                     </marker>
                   </defs>
                   <g transform={`translate(${(viewBoxParts[2]! * (1 - zoom)) / 2} ${(viewBoxParts[3]! * (1 - zoom)) / 2}) scale(${zoom})`}>
+                    {communityHulls.map(hull => (
+                      <g key={hull.id} className={styles.communityHullGroup} onClick={() => setSelected({ kind: 'community', id: hull.id })}>
+                        <path className={styles.communityHull} d={hull.d} />
+                        <g transform={`translate(${hull.x},${hull.y})`}><rect className={styles.communityHullChip} x={-hull.chipWidth / 2} y={-9} width={hull.chipWidth} height={18} rx={9} /><text className={styles.communityHullLabel} textAnchor="middle" y="3.5">{hull.label} · {hull.count}</text></g>
+                      </g>
+                    ))}
                     {graph.edges.map((edge) => {
                       const a = positions.get(edge.source), b = positions.get(edge.target)
                       if (!a || !b) return null
@@ -1067,6 +1196,7 @@ export function ContextGraph({
                       const edgeOnPath = pathEdgeIds.has(edge.id)
                       const edgeDimmed = selected?.kind === 'node' && !edgeHighlighted && !edgeOnPath
                       const edgeHovered = hovered?.kind === 'edge' && hovered.id === edge.id
+                      const crossCommunity = sourceNode.communityId !== undefined && targetNode.communityId !== undefined && sourceNode.communityId !== targetNode.communityId
                       return (
                         <g
                           key={edge.id}
@@ -1079,7 +1209,7 @@ export function ContextGraph({
                           <path
                             className={edge.status === 'pending' ? `${styles.edge} ${styles.edgePending}` : styles.edge}
                             d={`M${x1} ${y1} Q${(x1 + x2) / 2} ${(y1 + y2) / 2 - 14},${x2} ${y2}`}
-                            markerEnd={`url(#${markerId})`}
+                            markerEnd={edgeHovered || edgeHighlighted || edgeOnPath ? `url(#${markerId})` : undefined}
                           />
                           {edge.count && edge.count > 1 ? (
                             <text className={styles.edgeCount} x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 16}>{edge.count}</text>
@@ -1089,8 +1219,9 @@ export function ContextGraph({
                         </g>
                       )
                     })}
-                    {graph.nodes.filter(node => layerVisible(node) && visibleNodeIds.has(node.id)).map((node) => {
-                      const point = positions.get(node.id)!
+                    {graph.nodes.filter(node => (showCommunities || node.type !== 'community') && layerVisible(node) && visibleNodeIds.has(node.id)).map((node) => {
+                      const point = positions.get(node.id)
+                      if (!point) return null
                       const active = selected?.id === node.id
                       const highlightedNode = highlighted.nodeIds.has(node.id)
                       const pathNode = pathNodeIds.has(node.id)
@@ -1098,8 +1229,9 @@ export function ContextGraph({
                       const placement = labelLayout.get(node.id)
 const isHoveredNode = hovered?.kind === 'node' && hovered.id === node.id
 const showCompactLabel = active || highlightedNode || pathNode || placement !== undefined || isHoveredNode
-                      const dimmed = selected?.kind === 'node' && !highlightedNode && !pathNode
+                      const dimmed = (selected?.kind === 'node' && !highlightedNode && !pathNode) || (focusNodeId !== null && node.id !== focusNodeId && !highlightedNode)
                       const tone = nodeTone(node)
+                      const isHub = (degrees.get(node.id) ?? 0) >= Math.max(2, hubThreshold)
                       if (node.type === 'community') {
                         const community = (node as VisualNode).community
                         const size = community?.size ?? 0
@@ -1136,6 +1268,7 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                           aria-label={`${nodeDescriptor(node)}，${displayLabel(node.label)}`}
                           className={`${styles.node} ${compact2d ? styles.nodeCompact : ''} ${styles['tone_' + tone] ?? ''} ${active ? styles.nodeSelected : ''} ${pathNode ? styles.nodePath : ''} ${dimmed ? styles.nodeDimmed : ''}`}
                           transform={compact2d ? `translate(${point.x},${point.y})` : `translate(${point.x - 64},${point.y - 26})`}
+                          onPointerDown={event => startDrag(event, node)}
                           onClick={event => selectVisualNode(node, { shiftKey: event.shiftKey })}
                           onDoubleClick={() => selectVisualNode(node, { doubleClick: true })}
                           onMouseEnter={() => setHovered({ kind: 'node', id: node.id, ...hoverPercent(point), title: displayLabel(node.label), meta: [TONE_LABELS[tone] ?? node.type, node.legacy ? '旧版数据' : null, node.timestamp ? formatTime(node.timestamp) : null].filter(Boolean).join(' · ') })}
@@ -1150,7 +1283,10 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                           <title>{displayLabel(node.label)}</title>
                           {compact2d ? (
                             <>
-                              <circle r={compactRadius} />
+                              {isHub ? <circle className={styles.nodeHubGlow} r={compactRadius + 12} /> : null}
+                              <circle className={styles.nodeRing} r={compactRadius} />
+                              <circle className={styles.nodeCore} r={Math.max(3, compactRadius - 3)} />
+                              <text className={styles.nodeGlyph} y="3.4" textAnchor="middle">{GLYPHS[tone] ?? '●'}</text>
                               {showCompactLabel ? (
                                 <text className={styles.nodeCompactLabel} x={placement ? placement.x - point.x : compactRadius + 5} y={placement ? placement.y - point.y : 4}>{placement ? placement.text : shortLabel(node.label, 18)}</text>
                               ) : null}
@@ -1230,6 +1366,15 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                     </Button>
                   </div>
                   <div className={styles.graphDrawerBody}>
+                    <div className={styles.graphInspectorActions}>
+                      {chosenNode ? (
+                        <>
+                          <Button size="sm" variant="outline" onClick={() => setFocusNodeId(prev => prev === chosenNode.id ? null : chosenNode.id)}>{focusNodeId === chosenNode.id ? '取消聚焦' : '聚焦邻居'}</Button>
+                          <Button size="sm" variant="outline" onClick={() => setZoom(value => Math.min(2.4, value + 0.25))}>在图谱中打开</Button>
+                          <Button size="sm" variant="ghost" onClick={() => { void navigator.clipboard?.writeText(chosenNode.label) }}>复制</Button>
+                        </>
+                      ) : null}
+                    </div>
                     {chosenCommunity ? (
                       <CommunitySelection
                         community={chosenCommunity}
