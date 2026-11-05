@@ -615,3 +615,8 @@
 .graphDot_source{background:#8f9cb0}
 .graph3d::after{content:'';position:absolute;inset:0;z-index:2;pointer-events:none;background:radial-gradient(circle at 50% 44%,transparent 52%,color-mix(in srgb,var(--dsw-alias-bg-layer-3) 62%,transparent) 100%)}
 .graph3dTooltip{z-index:6}
+
+/* 大图性能：>150 节点时去掉逐节点 drop-shadow 滤镜（软件渲染下会严重掉帧） */
+.graphDense .nodeCompact circle { filter: none !important; }
+.graphDense .nodeCompactLabel { paint-order: normal; stroke: none; }
+.graphDense .node rect { filter: none; }

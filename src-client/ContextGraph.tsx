@@ -983,7 +983,7 @@ export function ContextGraph({
           >
             <div
               ref={graphHost}
-              className={`${styles.graph} ${fullscreen ? styles.graphFullscreen : ''} ${chosenNode || chosenEdge || chosenCommunity ? styles.graphWithDrawer : ''}`}
+              className={`${styles.graph} ${fullscreen ? styles.graphFullscreen : ''} ${(graph?.nodes.length ?? 0) > 150 ? styles.graphDense : ''} ${chosenNode || chosenEdge || chosenCommunity ? styles.graphWithDrawer : ''}`}
             >
               {dimension === '3d' ? (
                 <ContextGraph3D
