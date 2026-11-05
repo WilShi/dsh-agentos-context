@@ -85,6 +85,56 @@ function rememberDimension(value: GraphDimension) {
   }
 }
 
+/** 全局贪心标签排布：按 degree 降序，逐个尝试 8 个候选位，与已放置标签矩形 + 节点圆碰撞；放不下则放弃（hover 仍会显示）。 */
+export function placeLabelsGreedy(
+  candidates: Array<{ id: string; label: string }>,
+  positions: Map<string, { x: number; y: number }>,
+  degreeOf: (id: string) => number,
+  radiusOf: (id: string) => number,
+  zoom: number,
+  viewBoxParts: number[],
+): Map<string, { x: number; y: number; text: string }> {
+  const layout = new Map<string, { x: number; y: number; text: string }>()
+  const ranked = [...candidates].sort((left, right) => degreeOf(right.id) - degreeOf(left.id) || left.id.localeCompare(right.id))
+  const budget = zoom < 0.8 ? Math.min(6, Math.max(3, Math.ceil(candidates.length * 0.15))) : zoom > 1.5 ? Math.min(60, candidates.length) : Math.min(10, Math.max(5, Math.ceil(candidates.length * 0.4)))
+  const placed: number[][] = []
+  const circles = candidates.map(node => { const point = positions.get(node.id); return point ? { x: point.x, y: point.y, r: radiusOf(node.id) + 5 } : null }).filter((circle): circle is { x: number; y: number; r: number } => circle !== null)
+  const minX = (viewBoxParts[0] ?? 0) + 6
+  const minY = (viewBoxParts[1] ?? 0) + 6
+  const maxX = (viewBoxParts[0] ?? 0) + (viewBoxParts[2] ?? 960) - 6
+  const maxY = (viewBoxParts[1] ?? 0) + (viewBoxParts[3] ?? 500) - 6
+  const overlaps = (rect: number[], other: number[]) => rect[0]! < other[2]! && rect[2]! > other[0]! && rect[1]! < other[3]! && rect[3]! > other[1]!
+  for (const node of ranked.slice(0, budget)) {
+    const point = positions.get(node.id)
+    if (!point) continue
+    const radius = radiusOf(node.id)
+    const text = node.label.length > 16 ? node.label.slice(0, 15) + '…' : node.label
+    const width = Math.min(220, Array.from(text).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 10 : 6), 0) + 10)
+    const height = 16
+    const offsets = [
+      { dx: radius + 7, dy: 4 },
+      { dx: -radius - 7 - width, dy: 4 },
+      { dx: -width / 2, dy: -radius - 10 },
+      { dx: -width / 2, dy: radius + 18 },
+      { dx: radius * 0.75 + 6, dy: -radius * 0.75 - 4 },
+      { dx: -radius * 0.75 - 6 - width, dy: -radius * 0.75 - 4 },
+      { dx: radius * 0.75 + 6, dy: radius * 0.75 + 13 },
+      { dx: -radius * 0.75 - 6 - width, dy: radius * 0.75 + 13 },
+    ]
+    for (const offset of offsets) {
+      const x = point.x + offset.dx
+      const y = point.y + offset.dy
+      const rect = [x - 6, y - height + 4, x + width + 6, y + 4]
+      if (rect[0]! < minX || rect[2]! > maxX || rect[1]! < minY || rect[3]! > maxY) continue
+      if (placed.some(other => overlaps(rect, other))) continue
+      if (circles.some(circle => circle.x + circle.r > rect[0]! && circle.x - circle.r < rect[2]! && circle.y + circle.r > rect[1]! && circle.y - circle.r < rect[3]!)) continue
+      placed.push(rect)
+      layout.set(node.id, { x, y, text })
+      break
+    }
+  }
+  return layout
+}
 function convexHull(points: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
   if (points.length < 3) return points
   const sorted = [...points].sort((left, right) => left.x - right.x || left.y - right.y)
@@ -439,6 +489,11 @@ export function ContextGraph({
       [state.data],
     )
   const degrees = useMemo(() => graphDegrees(graph), [graph])
+  const toneCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const node of graph?.nodes ?? []) { if (node.type === 'community') continue; const tone = nodeTone(node); counts[tone] = (counts[tone] ?? 0) + 1 }
+    return counts
+  }, [graph])
   const radiusById = useMemo(
     () => new Map((graph?.nodes ?? []).map(node => [node.id, compactNodeRadius(node, degrees.get(node.id) ?? 0) + 8] as const)),
     [graph, degrees],
@@ -497,6 +552,8 @@ export function ContextGraph({
     return { left: `${Math.max(4, Math.min(88, ((point.x - x) / width) * 100))}%`, top: `${Math.max(4, Math.min(84, ((point.y - y) / height) * 100))}%` }
   }
   const [showAllNodes, setShowAllNodes] = useState(false)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [legendHover, setLegendHover] = useState<string | null>(null)
   const visibleNodeIds = useMemo(() => {
     const all = (graph?.nodes ?? []).filter(node => layerVisible(node))
     if (showCommunities || showAllNodes || all.length <= NODE_RENDER_CAP) return new Set(all.map(node => node.id))
@@ -578,36 +635,9 @@ export function ContextGraph({
     draggingRef.current = null
   }
   const labelLayout = useMemo(() => {
-      const layout = new Map<string, { x: number; y: number; text: string }>()
-      if (!graph) return layout
-      const entries = [...graph.nodes]
-        .filter(node => node.type !== 'community' && layerVisible(node) && visibleNodeIds.has(node.id))
-        .sort((left, right) => (degrees.get(right.id) ?? 0) - (degrees.get(left.id) ?? 0) || left.id.localeCompare(right.id))
-        .slice(0, zoom < 0.8 ? Math.min(6, Math.max(3, Math.ceil((graph?.nodes.length ?? 0) * 0.15))) : zoom > 1.5 ? Math.min(60, graph?.nodes.length ?? 0) : Math.min(12, Math.max(6, Math.ceil((graph?.nodes.length ?? 0) * 0.4))))
-      const occupied: number[][] = []
-      for (const node of entries) {
-        const point = positions.get(node.id)
-        if (!point) continue
-        const radius = compactNodeRadius(node, degrees.get(node.id) ?? 0)
-        const text = shortLabel(node.label, 14)
-        const width = Math.min(210, Array.from(text).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 9 : 6), 0) + 6)
-        const candidates = [
-          { x: point.x + radius + 6, y: point.y + 4 },
-          { x: point.x - radius - 6 - width, y: point.y + 4 },
-          { x: point.x - width / 2, y: point.y - radius - 8 },
-          { x: point.x - width / 2, y: point.y + radius + 16 },
-        ]
-        for (const candidate of candidates) {
-          const rect = [candidate.x - 4, candidate.y - 12, candidate.x + width + 4, candidate.y + 6]
-          const blocked = occupied.some(other => rect[0]! < other[2]! && rect[2]! > other[0]! && rect[1]! < other[3]! && rect[3]! > other[1]!)
-          if (blocked) continue
-          occupied.push(rect)
-          layout.set(node.id, { ...candidate, text })
-          break
-        }
-      }
-      return layout
-    }, [graph, positions, degrees, layerVisible, visibleNodeIds, zoom]),
+    const candidates = (graph?.nodes ?? []).filter(node => node.type !== 'community' && layerVisible(node) && visibleNodeIds.has(node.id)).map(node => ({ id: node.id, label: shortLabel(node.label, 16) }))
+    return placeLabelsGreedy(candidates, positions, id => degrees.get(id) ?? 0, id => { const node = graph?.nodes.find(item => item.id === id); return node ? compactNodeRadius(node, degrees.get(id) ?? 0) : 10 }, zoom, viewBoxParts)
+  }, [graph, positions, degrees, layerVisible, visibleNodeIds, zoom, viewBoxParts]),
     nodeById = useMemo(
       () => new Map(graph?.nodes.map(node => [node.id, node]) ?? []),
       [graph],
@@ -641,6 +671,42 @@ export function ContextGraph({
     selected?.kind === 'community'
       ? state.data?.communities?.find(row => row.id === selected.id)
       : undefined
+  const minimap = useMemo(() => {
+    if ((graph?.nodes.length ?? 0) <= 150) return null
+    const points = [...positions.values()]
+    if (points.length === 0) return null
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const point of points) { minX = Math.min(minX, point.x); minY = Math.min(minY, point.y); maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y) }
+    const pad = 36
+    const width = Math.max(120, maxX - minX + pad * 2)
+    const height = Math.max(90, maxY - minY + pad * 2)
+    const vbX = viewBoxParts[0] ?? 0
+    const vbY = viewBoxParts[1] ?? 0
+    const vbW = viewBoxParts[2] ?? VIEW_WIDTH
+    const vbH = viewBoxParts[3] ?? VIEW_HEIGHT
+    const z = Math.max(0.2, zoom)
+    const centerX = vbX + vbW / 2 - pan.x / z
+    const centerY = vbY + vbH / 2 - pan.y / z
+    const viewWidth = vbW / z
+    const viewHeight = vbH / z
+    const dots = (graph?.nodes ?? []).filter(node => visibleNodeIds.has(node.id)).slice(0, 600).map(node => { const point = positions.get(node.id); return point ? { x: point.x, y: point.y, tone: nodeTone(node) } : null }).filter((dot): dot is { x: number; y: number; tone: string } => dot !== null)
+    return { minX: minX - pad, minY: minY - pad, width, height, dots, viewport: { x: centerX - viewWidth / 2, y: centerY - viewHeight / 2, width: viewWidth, height: viewHeight } }
+  }, [graph, positions, zoom, pan, viewBoxParts, visibleNodeIds])
+
+  const moveMinimap = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!minimap) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const fx = (event.clientX - rect.left) / Math.max(1, rect.width)
+    const fy = (event.clientY - rect.top) / Math.max(1, rect.height)
+    const targetX = minimap.minX + fx * minimap.width
+    const targetY = minimap.minY + fy * minimap.height
+    const vbX = viewBoxParts[0] ?? 0
+    const vbY = viewBoxParts[1] ?? 0
+    const vbW = viewBoxParts[2] ?? VIEW_WIDTH
+    const vbH = viewBoxParts[3] ?? VIEW_HEIGHT
+    const z = Math.max(0.2, zoom)
+    setPan({ x: vbX + vbW / 2 - z * targetX - (vbW * (1 - z)) / 2, y: vbY + vbH / 2 - z * targetY - (vbH * (1 - z)) / 2 })
+  }
   const highlighted = useMemo(() => {
     if (!graph || selected?.kind !== 'node')
       return { nodeIds: new Set<string>(), edgeIds: new Set<string>() }
@@ -863,22 +929,37 @@ export function ContextGraph({
             </div>
           </details>
           <div className={styles.badges} aria-label="记忆层级图例">
-            <span className={styles.meta}>图例（点击过滤）：</span>
+            <span className={styles.meta}>图例（点击过滤，hover 高亮）：</span>
             {LAYERS.map(layer => (
               <button
                 key={layer}
                 type="button"
                 className={`${styles.legendChip} ${styles['legend_' + layer] ?? ''} ${layerFilter === layer ? styles.legendChipActive : ''}`}
                 aria-pressed={layerFilter === layer}
+                onMouseEnter={() => setLegendHover(layer)}
+                onMouseLeave={() => setLegendHover(null)}
                 onClick={() => setLayerFilter(layerFilter === layer ? null : layer)}
               >
+                <span className={styles.legendGlyph}>{GLYPHS[layer]}</span>
                 {memoryLayerLabel[layer]}
+                <span className={styles.legendCount}>{toneCounts[layer] ?? 0}</span>
               </button>
             ))}
-            <span className={`${styles.legendChip} ${styles.legend_entity}`}>对象 / 来源</span>
+            {([['entity', '对象'], ['document', '知识文档'], ['source', '来源证据'], ['summary', '摘要']] as const).map(([tone, label]) => (
+              <span
+                key={tone}
+                className={`${styles.legendChip} ${styles['legend_' + tone] ?? ''}`}
+                onMouseEnter={() => setLegendHover(tone)}
+                onMouseLeave={() => setLegendHover(null)}
+              >
+                <span className={styles.legendGlyph}>{GLYPHS[tone]}</span>
+                {label}
+                <span className={styles.legendCount}>{toneCounts[tone] ?? 0}</span>
+              </span>
+            ))}
             <span className={`${styles.legendChip} ${styles.legend_pending}`}>虚线：待确认</span>
             {layerFilter !== null ? <button type="button" className={styles.legendChip} onClick={() => setLayerFilter(null)}>清除过滤</button> : null}
-                    </div>
+          </div>
         </>
       ) : (
         <div className={styles.graphOverviewBar}>
@@ -1170,7 +1251,7 @@ export function ContextGraph({
                       <path d="M0 0 10 5 0 10" fill="context-stroke" />
                     </marker>
                   </defs>
-                  <g transform={`translate(${(viewBoxParts[2]! * (1 - zoom)) / 2} ${(viewBoxParts[3]! * (1 - zoom)) / 2}) scale(${zoom})`}>
+                  <g transform={`translate(${(viewBoxParts[2]! * (1 - zoom)) / 2 + pan.x} ${(viewBoxParts[3]! * (1 - zoom)) / 2 + pan.y}) scale(${zoom})`}>
                     {communityHulls.map(hull => (
                       <g key={hull.id} className={styles.communityHullGroup} onClick={() => setSelected({ kind: 'community', id: hull.id })}>
                         <path className={styles.communityHull} d={hull.d} />
@@ -1266,7 +1347,7 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                           role="button"
                           tabIndex={0}
                           aria-label={`${nodeDescriptor(node)}，${displayLabel(node.label)}`}
-                          className={`${styles.node} ${compact2d ? styles.nodeCompact : ''} ${styles['tone_' + tone] ?? ''} ${active ? styles.nodeSelected : ''} ${pathNode ? styles.nodePath : ''} ${dimmed ? styles.nodeDimmed : ''}`}
+                          className={`${styles.node} ${compact2d ? styles.nodeCompact : ''} ${styles['tone_' + tone] ?? ''} ${legendHover !== null && legendHover !== tone ? styles.nodeLegendDim : ''} ${active ? styles.nodeSelected : ''} ${pathNode ? styles.nodePath : ''} ${dimmed ? styles.nodeDimmed : ''}`}
                           transform={compact2d ? `translate(${point.x},${point.y})` : `translate(${point.x - 64},${point.y - 26})`}
                           onPointerDown={event => startDrag(event, node)}
                           onClick={event => selectVisualNode(node, { shiftKey: event.shiftKey })}
@@ -1303,6 +1384,13 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                     })}
                   </g>
                 </svg>
+                {minimap !== null ? (
+                  <svg className={styles.graphMinimap} viewBox={`${minimap.minX} ${minimap.minY} ${minimap.width} ${minimap.height}`} role="img" aria-label="图谱小地图" onPointerDown={moveMinimap}>
+                    <rect className={styles.minimapBg} x={minimap.minX} y={minimap.minY} width={minimap.width} height={minimap.height} rx={14} />
+                    {minimap.dots.map((dot, index) => <circle key={index} className={styles.minimapDot} data-tone={dot.tone} cx={dot.x} cy={dot.y} r={2.4} />)}
+                    <rect className={styles.minimapViewport} x={minimap.viewport.x} y={minimap.viewport.y} width={minimap.viewport.width} height={minimap.viewport.height} rx={6} />
+                  </svg>
+                ) : null}
                 {hovered !== null ? (
                   <div className={styles.graphHoverCard} style={{ left: hovered.x, top: hovered.y }} role="tooltip">
                     <strong>{hovered.title}</strong>

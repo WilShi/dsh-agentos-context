@@ -511,6 +511,7 @@ export function ContextGraph3D({
       const realPointPositions: number[] = []
       const realPointColors: number[] = []
       const densityScale = graph.nodes.length < 120 ? 1.38 : graph.nodes.length > 900 ? 1.12 : 1.24
+      const labelIds = new Set([...rendered.nodes].sort((left, right) => (rendered.degree.get(right.id) ?? 0) - (rendered.degree.get(left.id) ?? 0)).slice(0, 12).map(item => item.id))
       for (const node of rendered.nodes) {
         const point = rendered.positions.get(node.id)
         if (!point) continue
@@ -538,10 +539,11 @@ export function ContextGraph3D({
         root.add(hit)
         nodeMeshes.push(hit)
         nodeVisuals.set(node.id, { mesh, material, baseRadius: radius })
-        const permanentLabel = pointCloudPermanentLabel(node, graph.nodes.length)
+        const permanentLabel = pointCloudPermanentLabel(node, graph.nodes.length) ?? (labelIds.has(node.id) ? (label(node).length > 18 ? label(node).slice(0, 17) + '…' : label(node)) : null)
         if (permanentLabel) {
           const visual = createPermanentLabel(permanentLabel, palette)
           if (visual) {
+            visual.sprite.scale.multiplyScalar(0.8)
             visual.sprite.position.set(
               point.x,
               point.y + radius + 0.24,
@@ -577,14 +579,16 @@ export function ContextGraph3D({
 
       const lineMaterials = {
         normal: new LineMaterial({
-          color: threeColor(palette.edge).getHex(),
-          linewidth: 1.4,
+          depthTest: false,
+          color: 0x527db5,
+          linewidth: 4.2,
           transparent: true,
-          opacity: 0.56,
+          opacity: 1,
           resolution: new ThreeRuntime.Vector2(width, height),
         }),
         pending: new LineMaterial({
-          color: threeColor(palette.pending).getHex(),
+          depthTest: false,
+          color: 0xd28b3c,
           linewidth: 1.35,
           transparent: true,
           opacity: 0.72,
@@ -594,6 +598,7 @@ export function ContextGraph3D({
           resolution: new ThreeRuntime.Vector2(width, height),
         }),
         active: new LineMaterial({
+          depthTest: false,
           color: threeColor(palette.active).getHex(),
           linewidth: 2.6,
           transparent: true,

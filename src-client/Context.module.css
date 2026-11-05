@@ -650,3 +650,18 @@
 .communityHull{fill:color-mix(in srgb,var(--dsw-alias-brand-primary,#6689b9) 4%,transparent);stroke-dasharray:6 6}
 
 .edge{opacity:.5}
+
+/* ── P1：小地图 / 图例计数 / 标签 hover 高亮 ── */
+.graphMinimap{position:absolute;right:14px;bottom:14px;z-index:5;width:172px;height:120px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 70%,transparent);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 88%,transparent);box-shadow:0 8px 22px rgba(0,0,0,.10);backdrop-filter:blur(8px);cursor:crosshair}
+.minimapDot{fill:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,transparent);opacity:.8}
+.minimapDot[data-tone="working"]{fill:#e0a03c}.minimapDot[data-tone="episodic"]{fill:#8b74e0}.minimapDot[data-tone="semantic"]{fill:#3f83d8}.minimapDot[data-tone="procedural"]{fill:#2f9e78}.minimapDot[data-tone="entity"]{fill:#35a6c9}.minimapDot[data-tone="document"]{fill:#2f9d92}.minimapDot[data-tone="summary"]{fill:#a06bd8}
+.minimapViewport{fill:color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,transparent);stroke:var(--dsw-alias-brand-primary);stroke-width:1.4;stroke-dasharray:4 3}
+.nodeLegendDim{opacity:.16}
+.legendGlyph{font-size:9px;opacity:.9}
+.legendCount{margin-left:2px;padding:0 4px;border-radius:7px;background:color-mix(in srgb,currentColor 12%,transparent);font-size:9px;font-weight:700}
+.graph .graphMinimap{width:172px;height:120px}
+.graph .graphMinimap{z-index:6}
+.minimapBg{fill:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,transparent);stroke:color-mix(in srgb,var(--dsw-alias-border-l2) 70%,transparent);stroke-width:1}
+.graph svg.graphMinimap{position:absolute !important;right:14px !important;bottom:14px !important;left:auto !important;top:auto !important;width:172px !important;height:120px !important;z-index:7 !important;display:block !important}
+/* 收尾：图谱画布高度控制在 modal 可视区内，保证右下角 minimap 可见 */
+.graph:not(.graphFullscreen){height:clamp(300px,40vh,400px) !important;min-height:300px}
