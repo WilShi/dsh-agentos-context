@@ -50,6 +50,16 @@
  *   lib backend; the plugin does not re-read it directly but documents it.
  */
 import z from "@deepseek-ai/schemastery";
+
+// Older schemastery builds (3.18.2 and earlier, shipped by some DSH profiles)
+// predate the volatile() schema modifier; degrade it to a no-op so config
+// validation still works. Live (no-restart) updates then require a restart.
+{
+    const schemaPrototype = Object.getPrototypeOf(z.any());
+    if (typeof schemaPrototype.volatile !== "function") {
+        schemaPrototype.volatile = function volatile() { return this; };
+    }
+}
 export const ConfigSchema = z.object({
     baseUrl: z.string().default("http://127.0.0.1:8000"),
     authorizationRef: z.string().role("credential-ref").default("OPENCONTEXT_HTTP_AUTHORIZATION"),
