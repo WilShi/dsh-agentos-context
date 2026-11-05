@@ -1,0 +1,5 @@
+# @wilshi/dsh-agentos-context bundle patch: mount the memory engine on the
+# OpenContext compatibility loader row used by the DSH web app.
+- insert:
+    - id: dsh-opencontext
+      name: '@wilshi/dsh-agentos-context'

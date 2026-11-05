@@ -1,0 +1,48 @@
+.root {
+  container-type: inline-size;
+}
+
+.headerRow {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.title {
+  white-space: nowrap;
+}
+
+.headerActions {
+  flex: 1 1 300px;
+  justify-content: flex-end;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.scope {
+  flex: 1 1 190px;
+  min-width: 0;
+  max-width: 260px;
+  width: auto !important;
+}
+
+@container (max-width: 840px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail {
+    position: static;
+  }
+}
+
+@container (max-width: 620px) {
+  .headerActions {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .scope {
+    max-width: min(100%, 320px);
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "name": "@wilshi/dsh-agentos-context",
+  "version": "0.3.1",
+  "description": "agentOS context — DSH-native, source-backed memory and ontology workspace (OpenContext compatible; community fork)",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WilShi/dsh-agentos-context.git"
+  },
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "LICENSE.opencontext",
+    "THIRD_PARTY_NOTICES.md",
+    "prototype/index.html",
+    "prototype/PROTOTYPE.md",
+    "docs/CONTRACT.md",
+    "docs/IMPLEMENTATION-STATUS.md",
+    "lib/types/**/*.d.ts"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node scripts/run-tests.mjs && vitest run --config vitest.config.ts --pool=threads --maxWorkers=1",
+    "build": "tsdown --config tsdown.config.ts",
+    "typecheck": "tsc -b tsconfig.json --pretty false",
+    "pack:release": "node -e \"require('node:fs').mkdirSync('artifacts',{recursive:true})\" && npm pack --cache .npm-cache --pack-destination artifacts",
+    "verify:public-benchmarks": "node --experimental-strip-types scripts/verify-public-benchmarks.mjs",
+    "verify:memory-scale": "node scripts/verify-memory-scale.mjs 10000",
+    "verify:release": "npm run test && npm run typecheck && npm run build && node scripts/verify-built-host.mjs && node scripts/verify-built-client.mjs && node scripts/verify-package.mjs && npm run pack:release && node scripts/verify-archive.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.5",
+    "@deepseek-ai/schemastery": "^3.18.5",
+    "officeparser": "^8.0.0",
+    "@melandlabs/opencontext": "^0.5.1"
+  },
+  "dependencies": {
+    "@melandlabs/env-config": "^0.4.0",
+    "better-sqlite3": "^12.0.0",
+    "sqlite-vec": "^0.1.7"
+  },
+  "devDependencies": {
+    "tsdown": "^0.22.2",
+    "lightningcss": "^1.33.0",
+    "three": "0.186.1",
+    "typescript": "^5.9.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "directories": {
+    "doc": "docs",
+    "lib": "lib",
+    "test": "tests"
+  },
+  "keywords": [],
+  "author": "agentos-context contributors",
+  "peerDependenciesMeta": {
+    "officeparser": {
+      "optional": true
+    },
+    "@melandlabs/opencontext": {
+      "optional": true
+    }
+  }
+}

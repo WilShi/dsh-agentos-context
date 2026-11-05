@@ -1,0 +1,28 @@
+.dialog {
+  box-sizing: border-box;
+  max-height: min(820px, calc(100vh - 48px));
+  min-width: 0;
+}
+
+.standard {
+  width: min(720px, calc(100vw - 48px)) !important;
+}
+
+.compact {
+  width: min(520px, calc(100vw - 48px)) !important;
+}
+
+.content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+@media (max-width: 600px), (max-height: 560px) {
+  .dialog {
+    width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 24px);
+    border-radius: 16px !important;
+  }
+}
