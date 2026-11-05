@@ -512,6 +512,7 @@ export function ContextGraph3D({
       const realPointColors: number[] = []
       const densityScale = graph.nodes.length < 120 ? 1.38 : graph.nodes.length > 900 ? 1.12 : 1.24
       const labelIds = new Set([...rendered.nodes].sort((left, right) => (rendered.degree.get(right.id) ?? 0) - (rendered.degree.get(left.id) ?? 0)).slice(0, 12).map(item => item.id))
+      let labelIndex = 0
       for (const node of rendered.nodes) {
         const point = rendered.positions.get(node.id)
         if (!point) continue
@@ -546,15 +547,35 @@ export function ContextGraph3D({
             visual.sprite.scale.multiplyScalar(0.8)
             visual.sprite.position.set(
               point.x,
-              point.y + radius + 0.24,
+              point.y + radius + 0.24 + labelIndex * 0.32,
               point.z,
             )
             root.add(visual.sprite)
             permanentLabels.push(visual)
+            labelIndex += 1
           }
         }
         realPointPositions.push(point.x, point.y, point.z)
         realPointColors.push(color.r / 255, color.g / 255, color.b / 255)
+      }
+      const communityGroups = new Map<string, { x: number; y: number; z: number; radius: number; count: number }>()
+      for (const node of rendered.nodes) {
+        const community = node.communityId ?? node.scopeId
+        if (!community) continue
+        const point = rendered.positions.get(node.id)
+        if (!point) continue
+        const entry = communityGroups.get(community) ?? { x: 0, y: 0, z: 0, radius: 0, count: 0 }
+        entry.x += point.x; entry.y += point.y; entry.z += point.z; entry.count += 1
+        communityGroups.set(community, entry)
+      }
+      for (const group of communityGroups.values()) {
+        if (group.count < 6) continue
+        const cx = group.x / group.count, cy = group.y / group.count, cz = group.z / group.count
+        let spread = 0
+        for (const node of rendered.nodes) { const point = rendered.positions.get(node.id); if (!point) continue; spread = Math.max(spread, Math.hypot(point.x - cx, point.y - cy, point.z - cz)) }
+        const glow = new ThreeRuntime.Mesh(new ThreeRuntime.SphereGeometry(Math.max(1.4, spread * 1.05), 18, 12), new ThreeRuntime.MeshBasicMaterial({ color: 0x7f93d8, transparent: true, opacity: 0.06, depthWrite: false, blending: ThreeRuntime.AdditiveBlending }))
+        glow.position.set(cx, cy, cz)
+        root.add(glow)
       }
       // One halo point per real record. There are no decorative fake nodes.
       const pointGeometry = new ThreeRuntime.BufferGeometry()
@@ -595,6 +616,17 @@ export function ContextGraph3D({
           dashed: true,
           dashSize: 0.12,
           gapSize: 0.08,
+          resolution: new ThreeRuntime.Vector2(width, height),
+        }),
+        cross: new LineMaterial({
+          depthTest: false,
+          color: 0x9b6bd6,
+          linewidth: 3.2,
+          transparent: true,
+          opacity: 0.9,
+          dashed: true,
+          dashSize: 0.16,
+          gapSize: 0.1,
           resolution: new ThreeRuntime.Vector2(width, height),
         }),
         active: new LineMaterial({
@@ -671,9 +703,12 @@ export function ContextGraph3D({
           target.z,
         ])
         const pending = edge.status === 'pending'
+        const sourceCommunity = (rendered.nodes.find(item => item.id === edge.source) as ContextGraphNode | undefined)?.communityId
+        const targetCommunity = (rendered.nodes.find(item => item.id === edge.target) as ContextGraphNode | undefined)?.communityId
+        const crossCommunity = sourceCommunity !== undefined && targetCommunity !== undefined && sourceCommunity !== targetCommunity
         const line = new Line2(
           geometry,
-          pending ? lineMaterials.pending : lineMaterials.normal,
+          pending ? lineMaterials.pending : crossCommunity ? lineMaterials.cross : lineMaterials.normal,
         )
         line.computeLineDistances()
         root.add(line)

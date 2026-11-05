@@ -491,9 +491,18 @@ export function ContextGraph({
   const degrees = useMemo(() => graphDegrees(graph), [graph])
   const toneCounts = useMemo(() => {
     const counts: Record<string, number> = {}
-    for (const node of graph?.nodes ?? []) { if (node.type === 'community') continue; const tone = nodeTone(node); counts[tone] = (counts[tone] ?? 0) + 1 }
+    for (const node of (state.data?.nodes ?? graph?.nodes ?? [])) { if (node.type === 'community') continue; const tone = nodeTone(node); counts[tone] = (counts[tone] ?? 0) + 1 }
     return counts
   }, [graph])
+  const communityStats = useMemo(() => {
+    const map = new Map<string, { nodes: number; internal: number; cross: number }>()
+    const nodes = state.data?.nodes ?? []
+    const keyOf = new Map(nodes.map(node => [node.id, node.communityId ?? node.scopeId ?? 'all']))
+    for (const node of nodes) { const key = node.communityId ?? node.scopeId ?? 'all'; const entry = map.get(key) ?? { nodes: 0, internal: 0, cross: 0 }; entry.nodes += 1; map.set(key, entry) }
+    for (const edge of state.data?.edges ?? []) { const left = keyOf.get(edge.source); const right = keyOf.get(edge.target); if (!left || !right) continue; if (left === right) { const entry = map.get(left); if (entry) entry.internal += 1 } else { const a = map.get(left); const b = map.get(right); if (a) a.cross += 1; if (b) b.cross += 1 } }
+    return map
+  }, [state.data])
+
   const radiusById = useMemo(
     () => new Map((graph?.nodes ?? []).map(node => [node.id, compactNodeRadius(node, degrees.get(node.id) ?? 0) + 8] as const)),
     [graph, degrees],
@@ -503,7 +512,7 @@ export function ContextGraph({
     return Math.max(4, values[Math.min(values.length - 1, Math.floor(values.length * 0.15))] ?? 4)
   }, [degrees])
   const force = useForceLayout(
-    (graph?.nodes ?? []).map(node => ({ id: node.id, communityId: node.communityId ?? node.community?.id, scopeId: node.scopeId })),
+    (graph?.nodes ?? []).map(node => ({ id: node.id, communityId: node.communityId ?? node.community?.id, scopeId: node.scopeId, subcluster: (node.communityId ?? node.community?.id ?? node.scopeId ?? 'all') + ':' + nodeTone(node) })),
     (graph?.edges ?? []).map(edge => ({ source: edge.source, target: edge.target })),
     { radiusOf: node => radiusById.get(node.id) ?? 10 },
   )
@@ -563,6 +572,23 @@ export function ContextGraph({
     return keep
   }, [graph, layerVisible, showCommunities, showAllNodes, degrees, selected])
   useEffect(() => { setShowAllNodes(false) }, [graph])
+  const subclusterBubbles = useMemo(() => {
+    const map = new Map<string, { key: string; x: number; y: number; count: number; tone: string }>()
+    for (const node of graph?.nodes ?? []) {
+      if (node.type === 'community') continue
+      if (!visibleNodeIds.has(node.id)) continue
+      const point = positions.get(node.id)
+      if (!point) continue
+      const tone = nodeTone(node)
+      const key = (node.communityId ?? node.scopeId ?? 'all') + ':' + tone
+      const entry = map.get(key) ?? { key, x: 0, y: 0, count: 0, tone }
+      entry.x += point.x
+      entry.y += point.y
+      entry.count += 1
+      map.set(key, entry)
+    }
+    return [...map.values()].map(entry => ({ ...entry, x: entry.x / entry.count, y: entry.y / entry.count, radius: 10 + Math.sqrt(entry.count) * 2.8 }))
+  }, [graph, positions, visibleNodeIds])
   const communityHulls = useMemo(() => {
     if (showCommunities) return [] as Array<{ id: string; label: string; count: number; d: string; x: number; y: number; chipWidth: number }>
     const communityLabels = new Map<string, string>()
@@ -1300,7 +1326,14 @@ export function ContextGraph({
                         </g>
                       )
                     })}
-                    {graph.nodes.filter(node => (showCommunities || node.type !== 'community') && layerVisible(node) && visibleNodeIds.has(node.id)).map((node) => {
+                    {zoom < 0.8 && (graph?.nodes.length ?? 0) > 150 ? (
+                      subclusterBubbles.map(bubble => (
+                        <g key={bubble.key} className={styles.subclusterGroup} transform={`translate(${bubble.x},${bubble.y})`} onClick={() => { setZoom(1.5); setPan({ x: 0, y: 0 }) }}>
+                          <circle className={styles.subclusterBubble} data-tone={bubble.tone} r={bubble.radius} />
+                          <text className={styles.subclusterCount} textAnchor="middle" y="4">{bubble.count}</text>
+                        </g>
+                      ))
+                    ) : graph.nodes.filter(node => (showCommunities || node.type !== 'community') && layerVisible(node) && visibleNodeIds.has(node.id)).map((node) => {
                       const point = positions.get(node.id)
                       if (!point) return null
                       const active = selected?.id === node.id
@@ -1318,6 +1351,11 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                         const size = community?.size ?? 0
                         const clusterRadius = 24 + Math.min(18, Math.sqrt(size) * 3.4)
                         const memberCount = Math.min(12, Math.max(3, size))
+                        const communityKey = node.community?.id ?? node.nativeId ?? node.id
+                        const stats = communityStats.get(communityKey) ?? { nodes: size, internal: 0, cross: 0 }
+                        const ringPoints = Array.from({ length: memberCount }, (_, index) => { const angle = (index / memberCount) * Math.PI * 2 - Math.PI / 2; return { x: Math.cos(angle) * clusterRadius * 1.6, y: Math.sin(angle) * clusterRadius * 1.35 } })
+                        const ringHull = convexHull(ringPoints)
+                        const hullPath = ringHull.length >= 3 ? ringHull.map((point, index) => (index === 0 ? 'M' : 'L') + (point.x * 1.14).toFixed(1) + ' ' + (point.y * 1.14).toFixed(1)).join(' ') + ' Z' : ''
                         return (
                           <g
                             key={node.id}
@@ -1326,18 +1364,16 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                             aria-label={`${nodeDescriptor(node)}，${displayLabel(node.label)}，${size} 项`}
                             className={`${styles.node} ${styles.communityCluster} ${active ? styles.nodeSelected : ''} ${dimmed ? styles.nodeDimmed : ''}`}
                             transform={`translate(${point.x},${point.y})`}
-                            onClick={() => setSelected({ kind: 'community', id: node.id })}
-                            onMouseEnter={() => setHovered({ kind: 'node', id: node.id, ...hoverPercent(point), title: displayLabel(node.label), meta: `${size} 项 · 点击展开社区` })}
+                            onClick={() => { setViewMode('nodes'); setNodeScope(node.scopeId); setSelected(null) }}
+                            onMouseEnter={() => setHovered({ kind: 'node', id: node.id, ...hoverPercent(point), title: displayLabel(node.label), meta: `${stats.nodes} 个节点 · ${stats.internal} 条内部关系 · ${stats.cross} 条跨社区` })}
                             onMouseLeave={() => setHovered(null)}
                           >
-                            <circle className={styles.communityHalo} r={clusterRadius * 1.55} />
-                            <circle className={styles.communityCore} r={clusterRadius * 0.62} />
-                            {Array.from({ length: memberCount }, (_, index) => {
-                              const angle = (index / memberCount) * Math.PI * 2 - Math.PI / 2
-                              return <circle key={index} className={styles.communityMember} cx={Math.cos(angle) * clusterRadius} cy={Math.sin(angle) * clusterRadius} r={1.9} />
-                            })}
-                            <text className={styles.communityLabel} y={clusterRadius * 1.55 + 14} textAnchor="middle">{shortLabel(node.label, 16)}</text>
-                            <text className={styles.communityCount} y={clusterRadius * 1.55 + 28} textAnchor="middle">{size} 项</text>
+                            {hullPath ? <path className={styles.communityViewHull} d={hullPath} /> : null}
+                            {ringPoints.map((point, index) => <circle key={index} className={styles.communityMember} cx={point.x} cy={point.y} r={2.2} />)}
+                            <g transform={`translate(0,${clusterRadius * 1.35 + 16})`}>
+                              <rect className={styles.communityHullChip} x={-((shortLabel(node.label, 16).length * 5) + 26)} y={-9} width={(shortLabel(node.label, 16).length * 10) + 52} height={18} rx={9} />
+                              <text className={styles.communityHullLabel} textAnchor="middle" y="3.5">{shortLabel(node.label, 16)} · {size} 项</text>
+                            </g>
                           </g>
                         )
                       }

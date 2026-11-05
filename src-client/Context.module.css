@@ -665,3 +665,18 @@
 .graph svg.graphMinimap{position:absolute !important;right:14px !important;bottom:14px !important;left:auto !important;top:auto !important;width:172px !important;height:120px !important;z-index:7 !important;display:block !important}
 /* 收尾：图谱画布高度控制在 modal 可视区内，保证右下角 minimap 可见 */
 .graph:not(.graphFullscreen){height:clamp(300px,40vh,400px) !important;min-height:300px}
+/* ── P2：社区 hull 视图 / 子簇 LOD ── */
+.communityViewHull{fill:color-mix(in srgb,var(--dsw-alias-brand-primary,#6689b9) 7%,transparent);stroke:color-mix(in srgb,var(--dsw-alias-brand-primary,#6689b9) 38%,transparent);stroke-width:1.2;stroke-dasharray:5 4;transition:fill 200ms ease,stroke-width 200ms ease}
+.communityCluster:hover .communityViewHull{fill:color-mix(in srgb,var(--dsw-alias-brand-primary,#6689b9) 14%,transparent);stroke-width:2}
+.subclusterGroup{cursor:zoom-in}
+.subclusterBubble{fill:color-mix(in srgb,var(--dsw-alias-label-secondary,#8793a4) 26%,transparent);stroke:color-mix(in srgb,var(--dsw-alias-label-secondary,#8793a4) 45%,transparent);stroke-width:1}
+.subclusterBubble[data-tone="working"]{fill:color-mix(in srgb,#e0a03c 30%,transparent);stroke:#c98a2c}
+.subclusterBubble[data-tone="episodic"]{fill:color-mix(in srgb,#8b74e0 30%,transparent);stroke:#7a62d4}
+.subclusterBubble[data-tone="semantic"]{fill:color-mix(in srgb,#3f83d8 30%,transparent);stroke:#2f6cbe}
+.subclusterCount{font-size:10px;font-weight:700;fill:var(--dsw-alias-label-primary);pointer-events:none}
+.subclusterGroup:hover .subclusterBubble{filter:drop-shadow(0 4px 12px rgba(60,90,140,.35))}/* P2：画布高度压到 modal 可视区，保证 900/800 高度下 minimap 都在画布内 */
+.graph:not(.graphFullscreen){height:240px !important;min-height:240px !important}
+
+.communityViewHull{fill:color-mix(in srgb,var(--dsw-alias-brand-primary,#6689b9) 14%,transparent) !important;stroke:color-mix(in srgb,var(--dsw-alias-brand-primary,#6689b9) 60%,transparent) !important;stroke-width:1.8 !important}
+.communityHullLabel{font-size:10.5px}
+.communityCluster .communityHullChip{fill:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 94%,transparent) !important;stroke:color-mix(in srgb,var(--dsw-alias-border-l2) 80%,transparent) !important}

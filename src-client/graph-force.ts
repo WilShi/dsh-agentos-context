@@ -5,6 +5,7 @@ export interface ForceNodeInput {
   id: string
   communityId?: string
   scopeId?: string
+  subcluster?: string
 }
 
 export interface ForceEdgeInput {
@@ -24,6 +25,7 @@ interface SimulationNode {
   vx: number
   vy: number
   community: string
+  subcluster: string
   fixed: boolean
 }
 
@@ -62,17 +64,27 @@ function initialPositions(
     const distance = keys.length > 1 ? 300 : 0
     const cx = WIDTH / 2 + Math.cos(angle) * distance
     const cy = HEIGHT / 2 + Math.sin(angle) * distance * 0.72
+    const subKeys = [...new Set(bucket.map(item => item.subcluster ?? key))]
+    const subCenters = new Map<string, { x: number; y: number }>()
+    subKeys.forEach((subKey, subIndex) => {
+      const subAngle = (subIndex / Math.max(1, subKeys.length)) * Math.PI * 2 - Math.PI / 2
+      const subDistance = subKeys.length > 1 ? Math.min(130, 60 + subKeys.length * 18) : 0
+      subCenters.set(subKey, { x: cx + Math.cos(subAngle) * subDistance, y: cy + Math.sin(subAngle) * subDistance * 0.82 })
+    })
     bucket.forEach((node, index) => {
-      const spread = 34 + Math.sqrt(bucket.length) * 16
+      const subCenter = subCenters.get(node.subcluster ?? key) ?? { x: cx, y: cy }
+      const subMembers = bucket.filter(item => (item.subcluster ?? key) === (node.subcluster ?? key)).length
+      const spread = 16 + Math.sqrt(subMembers) * 9
       const theta = hashUnit(node.id + ':t') * Math.PI * 2
       const ring = 0.28 + hashUnit(node.id + ':r') * 0.72
       result.push({
         id: node.id,
-        x: cx + Math.cos(theta) * ring * spread,
-        y: cy + Math.sin(theta) * ring * spread * 0.8,
+        x: subCenter.x + Math.cos(theta) * ring * spread,
+        y: subCenter.y + Math.sin(theta) * ring * spread * 0.8,
         vx: 0,
         vy: 0,
         community: key,
+        subcluster: node.subcluster ?? key,
         fixed: false,
       })
     })
@@ -102,6 +114,13 @@ function buildSimulation(
     bucket.count += 1
     communitySum.set(node.community, bucket)
   }
+  const subSums = new Map<string, { x: number; y: number; count: number }>()
+  for (const node of simulation) {
+    const bucket = subSums.get(node.subcluster) ?? { x: 0, y: 0, count: 0 }
+    bucket.x += node.x; bucket.y += node.y; bucket.count += 1
+    subSums.set(node.subcluster, bucket)
+  }
+  const subCentroids = new Map([...subSums.entries()].map(([key, value]) => [key, { x: value.x / value.count, y: value.y / value.count }]))
   const centroids = new Map(
     [...communitySum.entries()].map(([key, value]) => [key, { x: value.x / value.count, y: value.y / value.count }]),
   )
@@ -155,6 +174,8 @@ function buildSimulation(
     }
     // 3) 社区向心 + 全局向心
     for (const node of simulation) {
+      const subCenter = subCentroids.get(node.subcluster)
+      if (subCenter) { node.vx += (subCenter.x - node.x) * 0.05; node.vy += (subCenter.y - node.y) * 0.05 }
       const center = centroids.get(node.community)
       if (center) {
         node.vx += (center.x - node.x) * COMMUNITY_GRAVITY
