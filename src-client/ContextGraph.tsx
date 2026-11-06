@@ -719,6 +719,34 @@ export function ContextGraph({
     return { minX: minX - pad, minY: minY - pad, width, height, dots, viewport: { x: centerX - viewWidth / 2, y: centerY - viewHeight / 2, width: viewWidth, height: viewHeight } }
   }, [graph, positions, zoom, pan, viewBoxParts, visibleNodeIds])
 
+  const motionRef = useRef<number | null>(null)
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  const panRef = useRef(pan)
+  panRef.current = pan
+  const animateViewport = (targetZoom: number, targetPan: { x: number; y: number }, duration = 180) => {
+    if (typeof window === 'undefined' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setZoom(targetZoom)
+      setPan(targetPan)
+      return
+    }
+    if (motionRef.current !== null) cancelAnimationFrame(motionRef.current)
+    const startZoom = zoomRef.current
+    const startPan = panRef.current
+    const startedAt = performance.now()
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      setZoom(Number((startZoom + (targetZoom - startZoom) * eased).toFixed(3)))
+      setPan({ x: startPan.x + (targetPan.x - startPan.x) * eased, y: startPan.y + (targetPan.y - startPan.y) * eased })
+      if (progress < 1) motionRef.current = requestAnimationFrame(step)
+      else motionRef.current = null
+    }
+    motionRef.current = requestAnimationFrame(step)
+  }
+  useEffect(() => () => { if (motionRef.current !== null) cancelAnimationFrame(motionRef.current) }, [])
+  const animateZoom = (target: number) => animateViewport(target, panRef.current)
+
   const moveMinimap = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!minimap) return
     const rect = event.currentTarget.getBoundingClientRect()
@@ -731,13 +759,14 @@ export function ContextGraph({
     const vbW = viewBoxParts[2] ?? VIEW_WIDTH
     const vbH = viewBoxParts[3] ?? VIEW_HEIGHT
     const z = Math.max(0.2, zoom)
-    setPan({ x: vbX + vbW / 2 - z * targetX - (vbW * (1 - z)) / 2, y: vbY + vbH / 2 - z * targetY - (vbH * (1 - z)) / 2 })
+    animateViewport(zoom, { x: vbX + vbW / 2 - z * targetX - (vbW * (1 - z)) / 2, y: vbY + vbH / 2 - z * targetY - (vbH * (1 - z)) / 2 })
   }
   const highlighted = useMemo(() => {
     if (!graph || selected?.kind !== 'node')
       return { nodeIds: new Set<string>(), edgeIds: new Set<string>() }
     return graphNeighborhood(graph, selected.id)
   }, [graph, selected])
+  const matchNodeSet = useMemo(() => new Set(filter.trim() ? graph?.matchedNodeIds ?? [] : []), [graph, filter])
   const pathNodeIds = useMemo(() => new Set(path?.nodeIds ?? []), [path]),
     pathEdgeIds = useMemo(() => new Set(path?.edgeIds ?? []), [path])
   const closeSelection = () => {
@@ -1027,18 +1056,14 @@ export function ContextGraph({
               type="button"
               aria-label="缩小图谱"
               disabled={zoom <= 0.7}
-              onClick={() =>
-                setZoom(value =>
-                  Math.max(0.7, Number((value - 0.1).toFixed(1))),
-                )
-              }
+              onClick={() => animateZoom(Math.max(0.7, Number((zoomRef.current - 0.1).toFixed(1))))}
             >
               −
             </button>
             <button
               type="button"
               aria-label="重置图谱缩放"
-              onClick={() => setZoom(1)}
+              onClick={() => animateZoom(1)}
             >
               {Math.round(zoom * 100)}%
             </button>
@@ -1046,11 +1071,7 @@ export function ContextGraph({
               type="button"
               aria-label="放大图谱"
               disabled={zoom >= 1.4}
-              onClick={() =>
-                setZoom(value =>
-                  Math.min(1.4, Number((value + 0.1).toFixed(1))),
-                )
-              }
+              onClick={() => animateZoom(Math.min(1.4, Number((zoomRef.current + 0.1).toFixed(1))))}
             >
               ＋
             </button>
@@ -1251,6 +1272,7 @@ export function ContextGraph({
               ) : (
                 <>
                 <svg
+                  key={showCommunities ? 'stage-communities' : 'stage-nodes'}
                   ref={svgRef}
                   onPointerMove={moveDrag}
                   onPointerUp={endDrag}
@@ -1383,7 +1405,7 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                           role="button"
                           tabIndex={0}
                           aria-label={`${nodeDescriptor(node)}，${displayLabel(node.label)}`}
-                          className={`${styles.node} ${compact2d ? styles.nodeCompact : ''} ${styles['tone_' + tone] ?? ''} ${legendHover !== null && legendHover !== tone ? styles.nodeLegendDim : ''} ${active ? styles.nodeSelected : ''} ${pathNode ? styles.nodePath : ''} ${dimmed ? styles.nodeDimmed : ''}`}
+                          className={`${styles.node} ${compact2d ? styles.nodeCompact : ''} ${matchNodeSet.has(node.id) ? styles.nodeSearchMatch : ''} ${styles['tone_' + tone] ?? ''} ${legendHover !== null && legendHover !== tone ? styles.nodeLegendDim : ''} ${active ? styles.nodeSelected : ''} ${pathNode ? styles.nodePath : ''} ${dimmed ? styles.nodeDimmed : ''}`}
                           transform={compact2d ? `translate(${point.x},${point.y})` : `translate(${point.x - 64},${point.y - 26})`}
                           onPointerDown={event => startDrag(event, node)}
                           onClick={event => selectVisualNode(node, { shiftKey: event.shiftKey })}
