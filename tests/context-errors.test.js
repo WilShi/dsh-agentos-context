@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {classifyBackendError} from '../src/errors.js';
+test('backend classifier never returns raw filesystem URL SQL or credential text',()=>{for(const e of [Object.assign(new Error('C:/private/secret.db token=abc'),{statusCode:500}),new TypeError('https://evil.example/?key=abc'),{name:'KnowledgeUnavailableError',message:'SELECT * FROM private'}]){const out=classifyBackendError(e);assert.doesNotMatch(out.message,/private|secret|https?:|SELECT|abc/i);}});

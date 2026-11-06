@@ -9,12 +9,19 @@
  */
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 export function profileNodeModulesDir(env = process.env) {
-    const home = env.DSH_HOME?.trim() || join(homedir(), ".dsh");
+    const home = resolve(env.DSH_HOME?.trim() || join(homedir(), ".dsh"));
     const profile = env.DSH_PROFILE?.trim() || "web";
-    return join(home, "profiles", profile, "node_modules");
+    // A caller-controlled profile name must stay inside <home>/profiles.
+    if (profile.includes("/") || profile.includes("\\") || profile.includes("..") || profile.includes("\0"))
+        throw Object.assign(new Error("invalid DSH_PROFILE"), { code: "INVALID_INPUT" });
+    const profilesRoot = resolve(home, "profiles");
+    const candidate = resolve(profilesRoot, profile);
+    if (candidate !== profilesRoot && !candidate.startsWith(profilesRoot + sep))
+        throw Object.assign(new Error("invalid DSH_PROFILE"), { code: "INVALID_INPUT" });
+    return join(candidate, "node_modules");
 }
 function profileModulesAnchor(env = process.env) {
     return join(profileNodeModulesDir(env), "dsh-opencontext-resolver.cjs");

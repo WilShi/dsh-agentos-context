@@ -11,6 +11,7 @@
 import {
   useEffect,
   useId,
+  useRef,
   type ComponentPropsWithoutRef,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
@@ -38,6 +39,7 @@ const CSS = `
 .oc-tag-info{background:color-mix(in srgb,#3f9dd8 18%,transparent);color:#9ed7ff;border-color:color-mix(in srgb,#3f9dd8 40%,transparent)}
 .oc-tag-success{background:color-mix(in srgb,#49c08a 18%,transparent);color:#9ff0c6;border-color:color-mix(in srgb,#49c08a 40%,transparent)}
 .oc-tag-warning{background:color-mix(in srgb,#d8a13f 20%,transparent);color:#ffdfa3;border-color:color-mix(in srgb,#d8a13f 44%,transparent)}
+.oc-tag-danger{background:color-mix(in srgb,#d9534f 20%,transparent);color:#ffc9c4;border-color:color-mix(in srgb,#d9534f 44%,transparent)}
 .oc-tag-outline{background:transparent;color:var(--dsw-alias-label-secondary,#b7cadb);border-color:var(--dsw-alias-border-l2,rgba(120,150,180,.4))}
 .oc-switch{position:relative;display:inline-flex;align-items:center;gap:8px;cursor:pointer;color:var(--dsw-alias-label-secondary,#b7cadb);font:inherit}
 .oc-switch input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
@@ -58,6 +60,8 @@ const CSS = `
 .oc-modal-close:hover{background:var(--dsw-alias-bg-layer-3,rgba(120,150,180,.18));color:var(--dsw-alias-label-primary,#e8f4ff)}
 .oc-modal-body{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 20px 18px}
 .oc-modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:12px 20px 16px;border-top:1px solid var(--dsw-alias-border-l2,rgba(120,160,200,.16))}
+.oc-modal:focus{outline:none}
+@media (prefers-reduced-motion:reduce){.oc-btn,.oc-switch-track,.oc-switch-knob{transition:none}}
 `
 
 function installStyles(): void {
@@ -81,6 +85,18 @@ export type ButtonVariant = 'primary' | 'outline' | 'ghost' | 'toolbar'
 export interface ButtonProps extends ComponentPropsWithoutRef<'button'> {
   variant?: ButtonVariant
   size?: 'sm' | 'md'
+  /**
+   * Redeclared explicitly: this plugin ships compiled, and some consumer trees
+   * type-check without @types/react, where ComponentPropsWithoutRef resolves to
+   * an empty type and native attributes would disappear from the public props.
+   */
+  children?: ReactNode
+  className?: string
+  type?: 'button' | 'submit' | 'reset'
+  disabled?: boolean
+  id?: string
+  title?: string
+  onClick?: (event: MouseEvent<HTMLButtonElement>) => void
 }
 
 export function Button({ variant = 'outline', size = 'md', className, type = 'button', ...rest }: ButtonProps) {
@@ -91,9 +107,13 @@ export function Button({ variant = 'outline', size = 'md', className, type = 'bu
   return <button type={type} className={classes} {...rest} />
 }
 
-export type TagTone = 'neutral' | 'info' | 'warning' | 'success' | 'outline'
+export type TagTone = 'neutral' | 'info' | 'warning' | 'success' | 'danger' | 'outline'
 export interface TagProps extends ComponentPropsWithoutRef<'span'> {
   tone?: TagTone
+  /** Redeclared for @types/react-free consumer trees (see ButtonProps). */
+  children?: ReactNode
+  className?: string
+  title?: string
 }
 
 export function Tag({ tone = 'neutral', className, children, ...rest }: TagProps) {
@@ -138,6 +158,34 @@ export function Switch({ checked, disabled = false, label, className, id, onChan
   )
 }
 
+/**
+ * Open-dialog stack (bottom → top). Escape and Tab are handled by the topmost
+ * dialog only, so nested dialogs no longer close together. Each entry is the
+ * `useId()` of one mounted Modal.
+ */
+const modalStack: string[] = []
+
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
+/** Focusable descendants of one dialog, in DOM order. */
+function focusableWithin(panel: HTMLElement | null): HTMLElement[] {
+  if (panel === null) return []
+  return [...panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
+    element =>
+      element.getAttribute('aria-hidden') !== 'true' &&
+      // Compare the attribute rather than the `tabIndex` property: some DOM
+      // shims report -1 for native buttons, which would empty the trap.
+      element.getAttribute('tabindex') !== '-1',
+  )
+}
+
 export interface ModalProps {
   open: boolean
   onClose: () => void
@@ -170,18 +218,70 @@ export function Modal({
   onKeyDownCapture,
 }: ModalProps) {
   installStyles()
+  const modalId = useId()
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  // Keep the latest handler without making it an effect dependency: callers pass
+  // inline closures, and re-running the effect would restore/re-take focus on
+  // every parent render.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
   useEffect(() => {
-    if (!open) return undefined
-    const owner = typeof document === 'undefined' ? undefined : document
+    if (!open || typeof document === 'undefined') return undefined
+    const previousActive =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    modalStack.push(modalId)
+    const panel = panelRef.current
+    const initial = focusableWithin(panel)[0] ?? panel
+    try {
+      initial?.focus({ preventScroll: true })
+    } catch {
+      // Non-focusable panel (headless body without tabs): keep the host focus.
+    }
     const onKey = (event: KeyboardEvent): void => {
+      // Only the topmost dialog reacts; the bottom one stays inert.
+      if (modalStack[modalStack.length - 1] !== modalId) return
       if (event.key === 'Escape') {
-        event.stopPropagation()
-        onClose()
+        // stopImmediatePropagation: every open Modal listens in capture on the
+        // same document, so stopPropagation alone would still reach the others.
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const panelNode = panelRef.current
+      if (panelNode === null) return
+      const items = focusableWithin(panelNode)
+      if (items.length === 0) {
+        event.preventDefault()
+        panelNode.focus({ preventScroll: true })
+        return
+      }
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (first === undefined || last === undefined) return
+      const active = document.activeElement
+      const inside = active !== null && panelNode.contains(active)
+      if (event.shiftKey ? active === first || !inside : active === last || !inside) {
+        event.preventDefault()
+        ;(event.shiftKey ? last : first).focus()
       }
     }
-    owner?.addEventListener('keydown', onKey, true)
-    return () => { owner?.removeEventListener('keydown', onKey, true) }
-  }, [open, onClose])
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('keydown', onKey, true)
+      const index = modalStack.lastIndexOf(modalId)
+      if (index >= 0) modalStack.splice(index, 1)
+      // Return focus to the opener when it is still connected.
+      if (previousActive !== null && document.contains(previousActive)) {
+        try {
+          previousActive.focus({ preventScroll: true })
+        } catch {
+          // The opener disappeared between open and close.
+        }
+      }
+    }
+  }, [open, modalId])
 
   if (!open) return null
   const panelClass = ['oc-modal', className].filter((value) => typeof value === 'string' && value.length > 0).join(' ')
@@ -197,6 +297,8 @@ export function Modal({
       onMouseDown={closeOnBackdrop}
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className={panelClass}
         role="dialog"
         aria-modal="true"

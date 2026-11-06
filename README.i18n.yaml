@@ -1,0 +1,67 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/context/agentos-context/README.md
+/:
+  en: 4d9c0980eb7237d3
+  zh: 356009fc60447bbb
+/deepseek-ai-dsh-agentos-context:
+  en: ef8a07d5cd44d427
+  zh: 7719f1c92fd0f9dd
+/deepseek-ai-dsh-agentos-context/summary:
+  en: a20c08f84105aa19
+  zh: b7a9dca4cafb465f
+/deepseek-ai-dsh-agentos-context/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 457575787e95f57c
+/deepseek-ai-dsh-agentos-context/use-this-package:
+  en: 0e8cd600cd9c9eb0
+  zh: 7489f238ba627840
+/deepseek-ai-dsh-agentos-context/use-this-package/automatic-memory-and-recall:
+  en: 56bb480b8d6c3002
+  zh: a3ace50a176d2197
+/deepseek-ai-dsh-agentos-context/use-this-package/knowledge-and-document-parsing:
+  en: adce09e0e056a931
+  zh: f86500f499952405
+/deepseek-ai-dsh-agentos-context/use-this-package/graph-ontology-and-compatibility:
+  en: 15802f94da51e5f3
+  zh: 74111b1b8eee4380
+/deepseek-ai-dsh-agentos-context/understand-the-implementation:
+  en: 81edc502ac8be7ff
+  zh: 7627728d1b54cbdc
+/deepseek-ai-dsh-agentos-context/further-exploration:
+  en: 966eeb68e370959b
+  zh: 41135c0109ce82d5
+/deepseek-ai-dsh-agentos-context/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-agentos-context/model-experience/automatic-recall:
+  en: 6439b4312a56aaf5
+  zh: f1e75985adc44ea5
+/deepseek-ai-dsh-agentos-context/model-experience/automatic-recall/what-the-model-sees:
+  en: 7660942dea6dde50
+  zh: f433b6a5bd30955f
+/deepseek-ai-dsh-agentos-context/model-experience/automatic-recall/token-effect:
+  en: a758dc69c65205d3
+  zh: a814d794f3b33f97
+/deepseek-ai-dsh-agentos-context/model-experience/automatic-recall/kv-cache-effect:
+  en: 8e074116b4503e83
+  zh: 73ac152726580144
+/deepseek-ai-dsh-agentos-context/model-experience/memory-and-knowledge-tools:
+  en: b5d99a9b14b251fd
+  zh: 364634a84d29d64e
+/deepseek-ai-dsh-agentos-context/model-experience/memory-and-knowledge-tools/what-the-model-sees:
+  en: 7ded0722b6e36feb
+  zh: 88bef99e998973f2
+/deepseek-ai-dsh-agentos-context/model-experience/memory-and-knowledge-tools/token-effect:
+  en: e74adb3d24bed53b
+  zh: 696ee630448c08c2
+/deepseek-ai-dsh-agentos-context/model-experience/memory-and-knowledge-tools/kv-cache-effect:
+  en: 59eef4b0d5043933
+  zh: 4aaf55d077c33d46
+/deepseek-ai-dsh-agentos-context/known-limitations-and-deferred-work:
+  en: f597852d4914f4d4
+  zh: 6cf1a70885c050dd
+/deepseek-ai-dsh-agentos-context/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: e88aeb617ffb74ea

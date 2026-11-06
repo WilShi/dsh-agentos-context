@@ -97,7 +97,8 @@ export async function verifyDraftKey(
     return { ok: false, code: 'UPSTREAM', hint: '模型网关暂不可用' }
   } catch (error: unknown) {
     if (errorCode(error) === 'INVALID_INPUT') throw error
-    return { ok: false, code: 'NETWORK', hint: '模型网关暂不可达' }
+    // Never echo the gateway URL or the draft key: point at the settings tab.
+    return { ok: false, code: 'NETWORK', hint: '模型网关暂不可达，请检查网络、网关地址与密钥后重试' }
   }
 }
 
@@ -135,8 +136,8 @@ export async function listConfiguredModels(
       ...runtime,
       error: safeCode,
       hint: safeCode === 'DISTILL_NO_PERMISSION'
-        ? '当前凭据没有模型权限'
-        : '模型列表暂不可用',
+        ? '当前凭据没有模型权限，请在模型网关为它开通所需模型后重试'
+        : '模型列表暂不可用，请检查网关地址与凭据配置后重试',
       ...(safeCode === 'DISTILL_NO_PERMISSION' ? { applyUrl: APPLY_URL } : {}),
     }
   }

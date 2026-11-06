@@ -7,7 +7,25 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Button } from './ui-primitives.tsx'
-import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
+/**
+ * Structural subset of `@deepseek-ai/dsh-client-ui-settings/client`.
+ *
+ * The host module exists at runtime; this source tree does not install its
+ * declarations, and importing the types made the card (and every consumer of
+ * `ConfigCardFace`) untypable. The members used by this file are declared here.
+ */
+interface ConfigFormSnapshot<T> {
+  readonly value?: T | undefined
+  readonly user?: unknown
+  readonly revision: number
+  readonly status: string
+  readonly writable?: boolean
+}
+interface ConfigForm<T> {
+  subscribe(listener: () => void): () => void
+  getSnapshot(): ConfigFormSnapshot<T>
+  mutate(ops: readonly unknown[], expectedRevision?: number): Promise<boolean | void>
+}
 import type { ModelsResult, OcApi, VerifyKeyResult } from './api.ts'
 import type { ContextApi } from './context-api.ts'
 import { ContextModal } from './ContextModal.tsx'
@@ -127,6 +145,7 @@ export function ConfigCard(props: ConfigCardFace) {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsError, setSettingsError] = useState('')
   const credentialEpoch = useRef(0)
+  const copyTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => { setDistillDraft(distillModel) }, [distillModel])
   useEffect(() => { setEmbeddingDraft(embeddingModel) }, [embeddingModel])
@@ -153,12 +172,20 @@ export function ConfigCard(props: ConfigCardFace) {
     return () => { alive = false }
   }, [api, apiKeyEnv, credential.configured, distillModel])
 
+  // M6: a key belongs to the CURRENT credential reference. Bumping the epoch
+  // when apiKeyEnv changes makes an in-flight verify/save for the old reference
+  // drop its result instead of writing the key into the new namespace.
+  useEffect(() => { credentialEpoch.current++ }, [apiKeyEnv])
+
   const refreshCredential = useCallback(async (ref: string) => {
     const epoch = ++credentialEpoch.current
     try { const next = await api.describeCredential(ref); if (epoch === credentialEpoch.current) setCredential(next) }
     catch { /* describe 失败保持现状 */ }
   }, [api])
-  useEffect(() => () => { credentialEpoch.current++ }, [])
+  useEffect(() => () => {
+    credentialEpoch.current++
+    if (copyTimer.current !== undefined) window.clearTimeout(copyTimer.current)
+  }, [])
 
   useEffect(() => { if (snapshot.status === 'ready') void refreshCredential(apiKeyEnv) }, [apiKeyEnv, refreshCredential, snapshot.status])
   useEffect(() => {
@@ -170,20 +197,29 @@ export function ConfigCard(props: ConfigCardFace) {
     if (!editable || settingsBusy) return
     const key = draft.trim()
     if (!key) return
+    // M6: capture the generation and the credential reference this key was
+    // verified against. A model/ref switch (or a newer save) during the round
+    // trip must not store the key under the now-current reference.
+    const epoch = ++credentialEpoch.current
+    const targetRef = apiKeyEnv
     setVerify({ phase: 'checking' })
     setSettingsBusy(true)
     try {
       const result = await api.verifyKey({ apiKey: key })
+      if (epoch !== credentialEpoch.current) return
       if (result.ok) {
-        await api.setCredential(apiKeyEnv, key)
-        setDraft('')
+        await api.setCredential(targetRef, key)
+        if (epoch !== credentialEpoch.current) return
+        // Only clear the field when the user has not typed a newer key.
+        setDraft(current => (current.trim() === key ? '' : current))
         setVerify(result.dimensions === undefined ? { phase: 'ok' } : { phase: 'ok', dimensions: result.dimensions })
-        await refreshCredential(apiKeyEnv)
+        await refreshCredential(targetRef)
       } else {
         setVerify({ phase: 'failed', result })
       }
     } catch {
-      setVerify({ phase: 'failed', result: { ok: false, code: 'NETWORK', hint: '检查失败，请确认网络与配置后重试' } })
+      if (epoch === credentialEpoch.current)
+        setVerify({ phase: 'failed', result: { ok: false, code: 'NETWORK', hint: '检查失败，请确认网络与配置后重试' } })
     } finally {
       setSettingsBusy(false)
     }
@@ -193,7 +229,13 @@ export function ConfigCard(props: ConfigCardFace) {
     try {
       await navigator.clipboard.writeText(url)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      // L4: one owned timer, cleared on re-copy and on unmount, so a copied
+      // badge can never flip back after the card is gone.
+      if (copyTimer.current !== undefined) window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => {
+        copyTimer.current = undefined
+        setCopied(false)
+      }, 2000)
     } catch {
       // 剪贴板不可用时不阻塞
     }

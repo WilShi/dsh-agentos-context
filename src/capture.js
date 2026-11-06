@@ -1,6 +1,7 @@
 /** Capture only runtime-attributed human input, not role=user plugin or agent messages. */
 import {createHash} from 'node:crypto';
 import {humanMessageRows,sessionIdentity} from './context-origin.js';
+import {containsSecret} from './secrets.js';
 export function registerCapture(ctx,backend,config,options={}){
  const distiller=options.distiller??null;let disposed=false,queued=0,tail=Promise.resolve();
  const seen=new Set();const abort=new AbortController();const warnings=new Set();
@@ -18,7 +19,11 @@ export function registerCapture(ctx,backend,config,options={}){
   const job=tail.then(async()=>{
    for(const row of fresh){
     if(disposed||abort.signal.aborted)break;
-    const text=row.text.slice(0,32768);let entries=null,ontology=null;
+    const text=row.text.slice(0,32768);
+    // Automatic capture never persists or forwards credential-shaped content.
+    // The pattern set is conservative; a false positive only skips one capture.
+    if(containsSecret(text)){warn('SECRET_REJECTED');continue;}
+    let entries=null,ontology=null;
     if(distiller&&config.distillOnCapture){
      let fallbackReason='';
      try{
@@ -33,6 +38,10 @@ export function registerCapture(ctx,backend,config,options={}){
      catch{warn('DISTILL_UNAVAILABLE');fallbackReason='unavailable';}
      if(entries===null){if(!fallbackReason)warn('DISTILL_INVALID');fallbackReason=fallbackReason||'invalid';entries=[{content:text,kind:'note',layer:'working',importance:.25,distilled:false,fallbackReason}];}
     }else entries=[{content:text,distilled:false}];
+    // Distillation can echo a credential the raw-text check did not see
+    // (assembled across lines). Drop such entries before they reach storage.
+    if(Array.isArray(entries))entries=entries.filter(entry=>!containsSecret(String(entry?.content??'')));
+    if(!entries.length){warn('SECRET_REJECTED');continue;}
     let sourceMemoryId=null;
     for(const item of entries){
      if(disposed||abort.signal.aborted)continue;

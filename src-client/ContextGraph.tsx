@@ -399,7 +399,7 @@ export function ContextGraph({
     [expanded, setExpanded] = useState<Set<string>>(() => new Set()),
     [dimension, setDimension] = useState<GraphDimension>(savedDimension),
     [layerFilter, setLayerFilter] = useState<MemoryLayer | null>(null),
-    [hovered, setHovered] = useState<{ kind: 'node' | 'edge'; id: string; x: number; y: number; title: string; meta: string } | null>(null),
+    [hovered, setHovered] = useState<{ kind: 'node' | 'edge'; id: string; title: string; meta: string; x?: number | string; y?: number | string; left?: string; top?: string } | null>(null),
     [layoutMode, setLayoutMode] = useState<GraphLayoutMode>('community'),
     [threeError, setThreeError] = useState(''),
     [fullscreen, setFullscreen] = useState(false),
@@ -511,10 +511,11 @@ export function ContextGraph({
     const values = [...degrees.values()].sort((left, right) => right - left)
     return Math.max(4, values[Math.min(values.length - 1, Math.floor(values.length * 0.15))] ?? 4)
   }, [degrees])
+  const forceEnabled = dimension === '2d' && !showCommunities
   const force = useForceLayout(
     (graph?.nodes ?? []).map(node => ({ id: node.id, communityId: node.communityId ?? node.community?.id, scopeId: node.scopeId, subcluster: (node.communityId ?? node.community?.id ?? node.scopeId ?? 'all') + ':' + nodeTone(node) })),
     (graph?.edges ?? []).map(edge => ({ source: edge.source, target: edge.target })),
-    { radiusOf: node => radiusById.get(node.id) ?? 10 },
+    { radiusOf: node => radiusById.get(node.id) ?? 10, enabled: forceEnabled },
   )
   const fittedPositions = useMemo(() => {
     const points = [...force.positions.values()]
@@ -531,7 +532,8 @@ export function ContextGraph({
     for (const [id, point] of force.positions) result.set(id, { x: cx + (point.x - cx) * stretchX, y: cy + (point.y - cy) * stretchY })
     return result
   }, [force.positions, viewportSize])
-  const positions = fittedPositions,
+  const fallbackPositions = useMemo(() => graphPositions(graph), [graph])
+  const positions = forceEnabled ? fittedPositions : fallbackPositions,
     layerVisible = useMemo(() => (node: VisualNode) => {
     if (layerFilter === null) return true
     if (node.type !== 'memory') return true
@@ -571,6 +573,10 @@ export function ContextGraph({
     if (selected?.kind === 'node') keep.add(selected.id)
     return keep
   }, [graph, layerVisible, showCommunities, showAllNodes, degrees, selected])
+  const firstVisibleNodeId = useMemo(() => {
+    const list = (graph?.nodes ?? []).filter(node => node.type !== 'community' && layerVisible(node) && visibleNodeIds.has(node.id))
+    return list[0]?.id
+  }, [graph, layerVisible, visibleNodeIds])
   useEffect(() => { setShowAllNodes(false) }, [graph])
   const subclusterBubbles = useMemo(() => {
     const map = new Map<string, { key: string; x: number; y: number; count: number; tone: string }>()
@@ -719,13 +725,38 @@ export function ContextGraph({
     return { minX: minX - pad, minY: minY - pad, width, height, dots, viewport: { x: centerX - viewWidth / 2, y: centerY - viewHeight / 2, width: viewWidth, height: viewHeight } }
   }, [graph, positions, zoom, pan, viewBoxParts, visibleNodeIds])
 
+  const viewportGroupRef = useRef<SVGGElement>(null)
+  const minimapViewportRef = useRef<SVGRectElement>(null)
+  const minimapDragRef = useRef(false)
+  const minimapTargetPanRef = useRef({ x: 0, y: 0 })
+  const reduceMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+  const applyViewportTransform = (nextZoom: number, nextPan: { x: number; y: number }) => {
+    const vbX = viewBoxParts[0] ?? 0
+    const vbY = viewBoxParts[1] ?? 0
+    const vbW = viewBoxParts[2] ?? VIEW_WIDTH
+    const vbH = viewBoxParts[3] ?? VIEW_HEIGHT
+    const group = viewportGroupRef.current
+    if (group) group.setAttribute('transform', `translate(${(vbW * (1 - nextZoom)) / 2 + nextPan.x} ${(vbH * (1 - nextZoom)) / 2 + nextPan.y}) scale(${nextZoom})`)
+    const rect = minimapViewportRef.current
+    if (rect && minimap) {
+      const z = Math.max(0.2, nextZoom)
+      const centerX = vbX + vbW / 2 - nextPan.x / z
+      const centerY = vbY + vbH / 2 - nextPan.y / z
+      const width = vbW / z
+      const height = vbH / z
+      rect.setAttribute('x', String(centerX - width / 2))
+      rect.setAttribute('y', String(centerY - height / 2))
+      rect.setAttribute('width', String(width))
+      rect.setAttribute('height', String(height))
+    }
+  }
   const motionRef = useRef<number | null>(null)
   const zoomRef = useRef(zoom)
   zoomRef.current = zoom
   const panRef = useRef(pan)
   panRef.current = pan
   const animateViewport = (targetZoom: number, targetPan: { x: number; y: number }, duration = 180) => {
-    if (typeof window === 'undefined' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    if (reduceMotion) {
       setZoom(targetZoom)
       setPan(targetPan)
       return
@@ -737,18 +768,26 @@ export function ContextGraph({
     const step = (now: number) => {
       const progress = Math.min(1, (now - startedAt) / duration)
       const eased = 1 - Math.pow(1 - progress, 3)
-      setZoom(Number((startZoom + (targetZoom - startZoom) * eased).toFixed(3)))
-      setPan({ x: startPan.x + (targetPan.x - startPan.x) * eased, y: startPan.y + (targetPan.y - startPan.y) * eased })
+      const nextZoom = Number((startZoom + (targetZoom - startZoom) * eased).toFixed(3))
+      const nextPan = { x: startPan.x + (targetPan.x - startPan.x) * eased, y: startPan.y + (targetPan.y - startPan.y) * eased }
+      zoomRef.current = nextZoom
+      panRef.current = nextPan
+      // 动画期间只改 DOM transform，不触发 React 渲染（label/minimap 不逐帧重算）。
+      applyViewportTransform(nextZoom, nextPan)
       if (progress < 1) motionRef.current = requestAnimationFrame(step)
-      else motionRef.current = null
+      else {
+        motionRef.current = null
+        setZoom(targetZoom)
+        setPan(targetPan)
+      }
     }
     motionRef.current = requestAnimationFrame(step)
   }
   useEffect(() => () => { if (motionRef.current !== null) cancelAnimationFrame(motionRef.current) }, [])
   const animateZoom = (target: number) => animateViewport(target, panRef.current)
 
-  const moveMinimap = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!minimap) return
+  const minimapPanFor = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!minimap) return { x: 0, y: 0 }
     const rect = event.currentTarget.getBoundingClientRect()
     const fx = (event.clientX - rect.left) / Math.max(1, rect.width)
     const fy = (event.clientY - rect.top) / Math.max(1, rect.height)
@@ -758,8 +797,28 @@ export function ContextGraph({
     const vbY = viewBoxParts[1] ?? 0
     const vbW = viewBoxParts[2] ?? VIEW_WIDTH
     const vbH = viewBoxParts[3] ?? VIEW_HEIGHT
-    const z = Math.max(0.2, zoom)
-    animateViewport(zoom, { x: vbX + vbW / 2 - z * targetX - (vbW * (1 - z)) / 2, y: vbY + vbH / 2 - z * targetY - (vbH * (1 - z)) / 2 })
+    const z = Math.max(0.2, zoomRef.current)
+    return { x: vbX + vbW / 2 - z * targetX - (vbW * (1 - z)) / 2, y: vbY + vbH / 2 - z * targetY - (vbH * (1 - z)) / 2 }
+  }
+  const moveMinimap = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!minimap) return
+    minimapDragRef.current = true
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    const next = minimapPanFor(event)
+    minimapTargetPanRef.current = next
+    applyViewportTransform(zoomRef.current, next)
+  }
+  const dragMinimap = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!minimapDragRef.current || !minimap) return
+    const next = minimapPanFor(event)
+    minimapTargetPanRef.current = next
+    applyViewportTransform(zoomRef.current, next)
+  }
+  const endMinimap = () => {
+    if (!minimapDragRef.current) return
+    minimapDragRef.current = false
+    panRef.current = minimapTargetPanRef.current
+    setPan(minimapTargetPanRef.current)
   }
   const highlighted = useMemo(() => {
     if (!graph || selected?.kind !== 'node')
@@ -767,6 +826,7 @@ export function ContextGraph({
     return graphNeighborhood(graph, selected.id)
   }, [graph, selected])
   const matchNodeSet = useMemo(() => new Set(filter.trim() ? graph?.matchedNodeIds ?? [] : []), [graph, filter])
+  const pulseNodeIds = useMemo(() => new Set([...matchNodeSet].slice(0, 8)), [matchNodeSet])
   const pathNodeIds = useMemo(() => new Set(path?.nodeIds ?? []), [path]),
     pathEdgeIds = useMemo(() => new Set(path?.edgeIds ?? []), [path])
   const closeSelection = () => {
@@ -1299,7 +1359,7 @@ export function ContextGraph({
                       <path d="M0 0 10 5 0 10" fill="context-stroke" />
                     </marker>
                   </defs>
-                  <g transform={`translate(${(viewBoxParts[2]! * (1 - zoom)) / 2 + pan.x} ${(viewBoxParts[3]! * (1 - zoom)) / 2 + pan.y}) scale(${zoom})`}>
+                  <g ref={viewportGroupRef} transform={`translate(${(viewBoxParts[2]! * (1 - zoom)) / 2 + pan.x} ${(viewBoxParts[3]! * (1 - zoom)) / 2 + pan.y}) scale(${zoom})`}>
                     {communityHulls.map(hull => (
                       <g key={hull.id} className={styles.communityHullGroup} onClick={() => setSelected({ kind: 'community', id: hull.id })}>
                         <path className={styles.communityHull} d={hull.d} />
@@ -1403,9 +1463,10 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                         <g
                           key={node.id}
                           role="button"
-                          tabIndex={0}
+                          tabIndex={active || (!selected && node.id === firstVisibleNodeId) ? 0 : -1}
+                          data-node-id={node.id}
                           aria-label={`${nodeDescriptor(node)}，${displayLabel(node.label)}`}
-                          className={`${styles.node} ${compact2d ? styles.nodeCompact : ''} ${matchNodeSet.has(node.id) ? styles.nodeSearchMatch : ''} ${styles['tone_' + tone] ?? ''} ${legendHover !== null && legendHover !== tone ? styles.nodeLegendDim : ''} ${active ? styles.nodeSelected : ''} ${pathNode ? styles.nodePath : ''} ${dimmed ? styles.nodeDimmed : ''}`}
+                          className={`${styles.node} ${compact2d ? styles.nodeCompact : ''} ${pulseNodeIds.has(node.id) ? styles.nodeSearchMatch : ''} ${styles['tone_' + tone] ?? ''} ${legendHover !== null && legendHover !== tone ? styles.nodeLegendDim : ''} ${active ? styles.nodeSelected : ''} ${pathNode ? styles.nodePath : ''} ${dimmed ? styles.nodeDimmed : ''}`}
                           transform={compact2d ? `translate(${point.x},${point.y})` : `translate(${point.x - 64},${point.y - 26})`}
                           onPointerDown={event => startDrag(event, node)}
                           onClick={event => selectVisualNode(node, { shiftKey: event.shiftKey })}
@@ -1416,7 +1477,16 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                             if (event.key === 'Enter' || event.key === ' ') {
                               event.preventDefault()
                               selectVisualNode(node)
+                              return
                             }
+                            if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(event.key)) return
+                            event.preventDefault()
+                            const svg = event.currentTarget.ownerSVGElement
+                            const items = svg ? (Array.from(svg.querySelectorAll('[data-node-id]')) as SVGGElement[]) : []
+                            const index = items.indexOf(event.currentTarget)
+                            if (index < 0 || items.length === 0) return
+                            const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1
+                            items[(index + step + items.length) % items.length]?.focus()
                           }}
                         >
                           <title>{displayLabel(node.label)}</title>
@@ -1427,7 +1497,7 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                               <circle className={styles.nodeCore} r={Math.max(3, compactRadius - 3)} />
                               <text className={styles.nodeGlyph} y="3.4" textAnchor="middle">{GLYPHS[tone] ?? '●'}</text>
                               {showCompactLabel ? (
-                                <text className={styles.nodeCompactLabel} x={placement ? placement.x - point.x : compactRadius + 5} y={placement ? placement.y - point.y : 4}>{placement ? placement.text : shortLabel(node.label, 18)}</text>
+                                <text className={styles.nodeCompactLabel} x={placement ? placement.x - point.x : (active || isHoveredNode ? compactRadius * 1.12 : compactRadius) + 5} y={placement ? placement.y - point.y : 4}>{placement ? placement.text : shortLabel(node.label, 18)}</text>
                               ) : null}
                             </>
                           ) : (
@@ -1443,14 +1513,14 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                   </g>
                 </svg>
                 {minimap !== null ? (
-                  <svg className={styles.graphMinimap} viewBox={`${minimap.minX} ${minimap.minY} ${minimap.width} ${minimap.height}`} role="img" aria-label="图谱小地图" onPointerDown={moveMinimap}>
+                  <svg className={styles.graphMinimap} viewBox={`${minimap.minX} ${minimap.minY} ${minimap.width} ${minimap.height}`} role="img" aria-label="图谱小地图" onPointerDown={moveMinimap} onPointerMove={dragMinimap} onPointerUp={endMinimap} onPointerLeave={endMinimap} onPointerCancel={endMinimap}>
                     <rect className={styles.minimapBg} x={minimap.minX} y={minimap.minY} width={minimap.width} height={minimap.height} rx={14} />
                     {minimap.dots.map((dot, index) => <circle key={index} className={styles.minimapDot} data-tone={dot.tone} cx={dot.x} cy={dot.y} r={2.4} />)}
-                    <rect className={styles.minimapViewport} x={minimap.viewport.x} y={minimap.viewport.y} width={minimap.viewport.width} height={minimap.viewport.height} rx={6} />
+                    <rect ref={minimapViewportRef} className={styles.minimapViewport} x={minimap.viewport.x} y={minimap.viewport.y} width={minimap.viewport.width} height={minimap.viewport.height} rx={6} />
                   </svg>
                 ) : null}
                 {hovered !== null ? (
-                  <div className={styles.graphHoverCard} style={{ left: hovered.x, top: hovered.y }} role="tooltip">
+                  <div className={styles.graphHoverCard} style={{ left: hovered.x ?? hovered.left, top: hovered.y ?? hovered.top }} role="tooltip">
                     <strong>{hovered.title}</strong>
                     <span>{hovered.meta}</span>
                   </div>

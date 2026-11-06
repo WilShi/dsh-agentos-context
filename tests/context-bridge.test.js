@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+let createBackendBridge;
+try{({createBackendBridge}=await import('../src/context/backend-bridge.js'));}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
+function fixture(){const calls=[];const service={saveMemory:(x,o)=>(calls.push({x,o}),{id:'m',revision:1,content:x.content}),scope:x=>x.scopeId||'p',getMemory:async()=>({id:'m',revision:2,scopeId:'p',content:'old'}),reviseMemory:async x=>(calls.push(x),{id:'m',revision:3}),retireMemory:async x=>(calls.push(x),{id:'m',revision:3}),listMemories:async()=>[],search:async()=>[],warnings:()=>[]};const legacy={mode:'lib',listDocuments:async()=>({documents:[]}),dispose:async()=>{}};return{calls,bridge:createBackendBridge({service,legacy,defaultScope:()=> 'p'})};}
+test('bridge export exists',()=>assert.equal(typeof createBackendBridge,'function'));
+test('model metadata cannot impersonate a human origin',async()=>{const f=fixture();await f.bridge.remember({content:'record',metadata:{actorRole:'human',sourceActorRole:'human'}});assert.equal(f.calls[0].o.actorRole,'tool');assert.equal(Object.hasOwn(f.calls[0].x.metadata,'actorRole'),false);});
+test('capture origin is accepted only from internal options',async()=>{const f=fixture();await f.bridge.captureSource({content:'derived',metadata:{sourceActorRole:'human'}},{captureOrigin:{actorRole:'assistant',sourceActorRole:'human',sourceContent:'original',complete:false,lineageId:'source-message'}});assert.equal(f.calls[0].o.sourceContent,'original');assert.equal(f.calls[0].o.complete,false);});
+test('old revise response retains required keys and adds version',async()=>{const f=fixture();const r=await f.bridge.revise({id:'m',content:'new',reason:'reason'});assert.equal(r.deprecatedId,'m');assert.equal(r.newId,'m');assert.equal(r.revision,3);assert.equal(f.calls[0].expectedRevision,2);});
+test('knowledge calls still use the original backend',async()=>{const f=fixture();assert.deepEqual(await f.bridge.listDocuments({}),{documents:[]});});

@@ -1,4 +1,4 @@
-/** Same-origin UI data plane. Authentication stays with the existing DSH webServer. */
+/** Same-origin UI data plane used by tests and the legacy bundle route. Not wired into the shipped entry; keep the origin + x-agentos-context checks if it is (HOST-REVIEW L3). */
 const BASE='/opencontext-api/context';
 const MAX_BODY=128*1024;
 const MESSAGES={INVALID_INPUT:'请求字段不正确，请检查输入。',NOT_FOUND:'没有可访问的记录。',VERSION_CONFLICT:'内容已被更新，请刷新后重新核对。',IDEMPOTENCY_CONFLICT:'本次操作编号已用于不同内容。',ENTITY_CONFLICT:'该类型已存在相同名称或别名。',TYPE_MISMATCH:'不同类型的对象不能合并。',MERGE_CONFLICT:'合并会破坏现有关系，请先处理冲突。',INVALID_RELATION:'关系不符合类型定义。',INVALID_EVIDENCE:'引用必须是来源中的原文片段。',EVIDENCE_REQUIRED:'确认关系前请补充来源和原文。',INVALID_REFERENCE:'引用的记录当前不可用。',INVALID_TRANSITION:'当前状态不允许该操作。',SECRET_REJECTED:'内容疑似包含凭据，已拒绝保存。',LIMIT_EXCEEDED:'达到本次处理上限，请缩小范围。',STORE_CLOSED:'记忆服务已停止。',STORE_UNAVAILABLE:'记忆存储暂不可用。',STORE_FAILURE:'记忆操作未完成，请稍后重试。',ABORTED:'操作已取消。'};

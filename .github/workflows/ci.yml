@@ -3,10 +3,12 @@ on:
   push:
     branches: [main]
   pull_request:
+
 jobs:
-  build:
+  gates:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         node-version: [22.x, 24.x]
     steps:
@@ -14,5 +16,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      - run: npm install --no-audit --no-fund
-      - run: npm run build
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Node regression + client suites
+        run: npm test
+      - name: Strict typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Verify built host contract
+        run: npm run verify:host
+      - name: Verify built client contract
+        run: npm run verify:client
+      - name: Verify published package model
+        run: npm run verify:package
+      - name: Pack release archive
+        run: npm run pack:release
+      - name: Verify release archive
+        run: npm run verify:archive

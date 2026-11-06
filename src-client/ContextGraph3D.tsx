@@ -338,6 +338,9 @@ export function ContextGraph3D({
   })
   const [hovered, setHovered] = useState<Hovered>(null)
   const [autoRotate, setAutoRotate] = useState(true)
+  const autoRotateRef = useRef(autoRotate)
+  const controlsRef = useRef<any>(null)
+  const autoLoopRef = useRef<{ start: () => void; stop: () => void } | null>(null)
   const [themeRevision, setThemeRevision] = useState(0)
   const rendered = useMemo(
     () => ({ ...graph, ...pointCloudPositions(graph, layoutMode) }),
@@ -413,7 +416,7 @@ export function ContextGraph3D({
         antialias: true,
         alpha: true,
         powerPreference: 'high-performance',
-        preserveDrawingBuffer: true,
+        preserveDrawingBuffer: false,
       })
       renderer.setClearColor(threeColor(palette.background), 0)
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75))
@@ -422,33 +425,10 @@ export function ContextGraph3D({
       renderer.domElement.setAttribute('role', 'img')
       renderer.domElement.setAttribute(
         'aria-label',
-        `3D 记忆图谱，共 ${graph.nodes.length} 个真实节点、${graph.edges.length} 条关系`,
+        `3D 记忆图谱，共 ${graph.nodes.length} 个真实节点、${graph.edges.length} 条关系；方向键旋转，Enter 选中中心/悬停节点`,
       )
       renderer.domElement.tabIndex = 0
       element.replaceChildren(renderer.domElement)
-
-      requestAnimationFrame(() => {
-        if (disposed) return
-        try {
-          renderer.render(scene, camera)
-          const gl = renderer.getContext()
-          const canvasWidth = renderer.domElement.width || 0
-          const canvasHeight = renderer.domElement.height || 0
-          if (canvasWidth > 0 && canvasHeight > 0) {
-            const pixels = new Uint8Array(canvasWidth * canvasHeight * 4)
-            gl.readPixels(0, 0, canvasWidth, canvasHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
-            let painted = 0
-            for (let index = 3; index < pixels.length; index += 4) {
-              if (pixels[index] > 8) { painted += 1; if (painted > 24) break }
-            }
-            if (painted <= 24) {
-              callbacks.current.onUnavailable('当前环境 WebGL 首帧无可见像素（headless 或缺少 GPU 加速），已回退 2D')
-            }
-          }
-        } catch (error) {
-          console.warn('[agentos-context] 3D first-frame probe failed', error)
-        }
-      })
 
       const controls = new OrbitControlsRuntime(camera, renderer.domElement)
       controls.enableDamping = true
@@ -457,19 +437,30 @@ export function ContextGraph3D({
       controls.maxDistance = 120
       controls.zoomSpeed = 0.95
       controls.rotateSpeed = 0.62
-      controls.autoRotate = autoRotate
+      controls.autoRotate = autoRotateRef.current
       controls.autoRotateSpeed = 0.55
       controls.panSpeed = 0.72
+      controlsRef.current = controls
       const render = () => {
         if (!disposed) renderer.render(scene, camera)
       }
       let autoFrame: number | null = null
+      const stopAuto = () => {
+        if (autoFrame !== null) { cancelAnimationFrame(autoFrame); autoFrame = null }
+      }
       const animateAuto = () => {
-        if (disposed) return
-        if (controls.autoRotate) { controls.update(); render() }
+        autoFrame = null
+        if (disposed || !controls.autoRotate || document.hidden) return
+        controls.update()
+        render()
         autoFrame = requestAnimationFrame(animateAuto)
       }
-      autoFrame = requestAnimationFrame(animateAuto)
+      const startAuto = () => {
+        if (disposed || autoFrame !== null || !controls.autoRotate) return
+        autoFrame = requestAnimationFrame(animateAuto)
+      }
+      autoLoopRef.current = { start: startAuto, stop: stopAuto }
+      startAuto()
       const animateControls = () => {
         if (disposed) return
         if (controls.update()) {
@@ -480,7 +471,8 @@ export function ContextGraph3D({
       controls.addEventListener('change', render)
       controls.addEventListener('start', animateControls)
       const renderWhenVisible = () => {
-        if (!document.hidden) render()
+        if (document.hidden) stopAuto()
+        else { render(); startAuto() }
       }
       document.addEventListener('visibilitychange', renderWhenVisible)
 
@@ -558,6 +550,7 @@ export function ContextGraph3D({
         realPointPositions.push(point.x, point.y, point.z)
         realPointColors.push(color.r / 255, color.g / 255, color.b / 255)
       }
+      const glowMeshes: Array<{ geometry: any; material: any }> = []
       const communityGroups = new Map<string, { x: number; y: number; z: number; radius: number; count: number }>()
       for (const node of rendered.nodes) {
         const community = node.communityId ?? node.scopeId
@@ -573,9 +566,12 @@ export function ContextGraph3D({
         const cx = group.x / group.count, cy = group.y / group.count, cz = group.z / group.count
         let spread = 0
         for (const node of rendered.nodes) { const point = rendered.positions.get(node.id); if (!point) continue; spread = Math.max(spread, Math.hypot(point.x - cx, point.y - cy, point.z - cz)) }
-        const glow = new ThreeRuntime.Mesh(new ThreeRuntime.SphereGeometry(Math.max(1.4, spread * 1.05), 18, 12), new ThreeRuntime.MeshBasicMaterial({ color: 0x7f93d8, transparent: true, opacity: 0.06, depthWrite: false, blending: ThreeRuntime.AdditiveBlending }))
+        const glowGeometry = new ThreeRuntime.SphereGeometry(Math.max(1.4, spread * 1.05), 18, 12)
+        const glowMaterial = new ThreeRuntime.MeshBasicMaterial({ color: 0x7f93d8, transparent: true, opacity: 0.06, depthWrite: false, blending: ThreeRuntime.AdditiveBlending })
+        const glow = new ThreeRuntime.Mesh(glowGeometry, glowMaterial)
         glow.position.set(cx, cy, cz)
         root.add(glow)
+        glowMeshes.push({ geometry: glowGeometry, material: glowMaterial })
       }
       // One halo point per real record. There are no decorative fake nodes.
       const pointGeometry = new ThreeRuntime.BufferGeometry()
@@ -915,6 +911,27 @@ export function ContextGraph3D({
         event.preventDefault()
         if (!disposed) callbacks.current.onUnavailable('图形设备已重置')
       }
+      const keyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          const rect = renderer.domElement.getBoundingClientRect()
+          pick({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } as MouseEvent, true)
+          return
+        }
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+        event.preventDefault()
+        const offset = camera.position.clone().sub(controls.target)
+        const spherical = new ThreeRuntime.Spherical().setFromVector3(offset)
+        if (event.key === 'ArrowLeft') spherical.theta -= 0.12
+        if (event.key === 'ArrowRight') spherical.theta += 0.12
+        if (event.key === 'ArrowUp') spherical.phi = Math.max(0.08, spherical.phi - 0.1)
+        if (event.key === 'ArrowDown') spherical.phi = Math.min(Math.PI - 0.08, spherical.phi + 0.1)
+        camera.position.copy(controls.target).add(offset.setFromSpherical(spherical))
+        camera.lookAt(controls.target)
+        controls.update()
+        render()
+      }
+      renderer.domElement.addEventListener('keydown', keyDown)
       renderer.domElement.addEventListener('pointermove', pointerMove)
       renderer.domElement.addEventListener('pointerdown', pointerDownHandler)
       renderer.domElement.addEventListener('pointerup', pointerUp)
@@ -936,12 +953,29 @@ export function ContextGraph3D({
       observer.observe(element)
       cameraActions.current.fitAll()
       styleActions.current.apply()
+      let probeFrame: number | null = null
+      probeFrame = requestAnimationFrame(() => {
+        probeFrame = null
+        if (disposed || (graph?.nodes?.length ?? 0) === 0) return
+        try {
+          renderer.render(scene, camera)
+          const gl = renderer.getContext()
+          const info = renderer.info.render
+          const painted = info.points + info.lines + info.triangles
+          if ((gl.isContextLost?.() ?? false) || painted === 0) {
+            callbacks.current.onUnavailable('WebGL 未产生可绘制内容（headless 或缺少 GPU 加速），已回退 2D')
+          }
+        } catch (error) {
+          console.warn('[agentos-context] 3D paint probe failed', error)
+        }
+      })
       cleanUp = () => {
         observer.disconnect()
         controls.removeEventListener('change', render)
         controls.removeEventListener('start', animateControls)
         document.removeEventListener('visibilitychange', renderWhenVisible)
         controls.dispose()
+        renderer.domElement.removeEventListener('keydown', keyDown)
         renderer.domElement.removeEventListener('pointermove', pointerMove)
         renderer.domElement.removeEventListener('pointerdown', pointerDownHandler)
         renderer.domElement.removeEventListener('pointerup', pointerUp)
@@ -957,6 +991,7 @@ export function ContextGraph3D({
           visual.texture.dispose()
           visual.material.dispose()
         }
+        for (const glow of glowMeshes) { glow.geometry.dispose(); glow.material.dispose() }
         nodeGeometry.dispose()
         hitGeometry.dispose()
         hitMaterial.dispose()
@@ -968,7 +1003,10 @@ export function ContextGraph3D({
         renderer.renderLists.dispose()
         renderer.dispose()
         renderer.forceContextLoss()
-        if (autoFrame !== null) cancelAnimationFrame(autoFrame)
+        stopAuto()
+        if (probeFrame !== null) cancelAnimationFrame(probeFrame)
+        autoLoopRef.current = null
+        controlsRef.current = null
         renderer.domElement.remove()
         cameraActions.current = noopCamera
         styleActions.current.apply = () => {}
@@ -984,7 +1022,17 @@ export function ContextGraph3D({
       disposed = true
       cleanUp()
     }
-  }, [graph, layoutMode, rendered, themeRevision, autoRotate])
+  }, [graph, layoutMode, rendered, themeRevision])
+
+  useEffect(() => {
+    autoRotateRef.current = autoRotate
+    const controls = controlsRef.current
+    const loop = autoLoopRef.current
+    if (!controls || !loop) return
+    controls.autoRotate = autoRotate
+    if (autoRotate) loop.start()
+    else loop.stop()
+  }, [autoRotate])
 
   return (
     <div

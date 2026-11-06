@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'">
+  <title>agentOS context · 图谱查看器设计原型</title>
+  <style>
+    /*
+      设计假设
+      1. 图谱是需要横向空间的查看工具，不继续挤在设置窗口的 588px 内容列内。
+      2. 设置 → 记忆 → 图谱只保留摘要与入口，完整图谱使用 DSH Modal 视觉语汇叠加打开。
+      3. 默认隐藏技术性的来源节点；证据在详情面板呈现，需要时再打开“显示来源”。
+      4. 使用 DSH 的系统字体、灰阶、胶囊按钮、8/12/24/32px 圆角层级，不创建独立品牌皮肤。
+    */
+    :root {
+      color-scheme: light;
+      --bg-base: #f6f7f9;
+      --bg-layer-1: #ffffff;
+      --bg-layer-2: #ffffff;
+      --bg-hover: #f1f3f6;
+      --bg-active: #ebeef2;
+      --bg-canvas: #fafbfc;
+      --label-primary: #0f1115;
+      --label-secondary: #61666b;
+      --label-tertiary: #8c929a;
+      --border-l2: rgba(0, 0, 0, .10);
+      --border-l3: rgba(0, 0, 0, .16);
+      --mask: rgba(15, 17, 21, .24);
+      --mask-sub: rgba(15, 17, 21, .14);
+      --shadow-prominent: 0 0 0 .5px rgba(0,0,0,.16), 0 3px 8px rgba(0,0,0,.04), 0 0 20px rgba(0,0,0,.05);
+      --shadow-float: 0 8px 32px rgba(15, 17, 21, .12), 0 0 0 .5px rgba(0,0,0,.12);
+      --blue: #3d63dd;
+      --blue-soft: #edf2ff;
+      --violet: #7357d8;
+      --violet-soft: #f2efff;
+      --amber: #9a6500;
+      --amber-soft: #fff5dc;
+      --green: #197052;
+      --green-soft: #eaf7f1;
+      --red: #b54444;
+      --red-soft: #fff0ef;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; }
+    body { margin: 0; overflow: hidden; background: var(--bg-base); color: var(--label-primary); font: 14px/1.55 var(--font); }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+    .app { display: grid; grid-template-columns: 220px minmax(0, 1fr); width: 100%; height: 100%; }
+    .app-sidebar { padding: 22px 14px; border-right: 1px solid var(--border-l2); background: #f3f4f6; }
+    .brand { display: flex; align-items: center; gap: 9px; padding: 0 10px 24px; font-weight: 650; font-size: 16px; }
+    .brand-mark { width: 24px; height: 24px; border-radius: 50%; background: var(--label-primary); color: white; display: grid; place-items: center; font-size: 11px; }
+    .side-title { margin: 8px 10px; color: var(--label-tertiary); font-size: 12px; }
+    .side-row { display: flex; align-items: center; gap: 9px; width: 100%; height: 40px; padding: 0 12px; border: 0; border-radius: 12px; background: transparent; }
+    .side-row.active { background: var(--bg-active); }
+    .app-main { position: relative; min-width: 0; background: var(--bg-layer-1); }
+    .hero { position: absolute; inset: 0; display: grid; place-items: center; color: var(--label-tertiary); }
+    .hero-inner { text-align: center; }
+    .hero-inner h1 { margin: 0 0 8px; color: var(--label-primary); font-size: 30px; font-weight: 560; letter-spacing: -.03em; }
+
+    .settings-layer, .graph-layer { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .settings-layer { z-index: 10; }
+    .graph-layer { z-index: 20; padding: 24px; }
+    .mask { position: absolute; inset: 0; background: var(--mask); backdrop-filter: blur(2px); }
+    .graph-layer .mask { background: var(--mask-sub); backdrop-filter: blur(1px); }
+    .settings-panel { position: relative; z-index: 1; width: 800px; height: min(800px, calc(100vh - 48px)); max-width: calc(100vw - 48px); display: flex; overflow: hidden; border-radius: 32px; background: var(--bg-layer-2); box-shadow: var(--shadow-prominent); }
+    .settings-nav { flex: 0 0 188px; display: flex; flex-direction: column; gap: 18px; padding: 22px 12px 0; }
+    .settings-title { padding: 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
+    .nav-list { display: flex; flex-direction: column; gap: 4px; }
+    .nav-cell { display: flex; align-items: center; gap: 8px; width: 100%; height: 40px; padding: 9px 16px 9px 12px; border: 0; border-radius: 12px; background: transparent; text-align: left; }
+    .nav-cell.active, .nav-cell:hover { background: var(--bg-active); }
+    .settings-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .settings-header { flex: none; height: 54px; padding: 20px 14px 8px 10px; display: flex; justify-content: flex-end; gap: 8px; }
+    .settings-options { min-height: 0; flex: 1; overflow: auto; padding: 0 24px 24px; }
+    .section-heading { margin: 12px 0 18px; }
+    .section-heading h2 { margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; }
+    .section-heading p { margin: 4px 0 0; color: var(--label-secondary); font-size: 12px; }
+    .scope-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .scope-row select { flex: 1; }
+    .tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border-l2); }
+    .tab { position: relative; min-height: 40px; padding: 8px 2px; border: 0; background: transparent; color: var(--label-secondary); }
+    .tab.active { color: var(--label-primary); font-weight: 600; }
+    .tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--label-primary); }
+    .overview { margin-top: 18px; padding: 18px; border: 1px solid var(--border-l2); border-radius: 12px; }
+    .overview-head { display: flex; align-items: flex-start; gap: 12px; }
+    .overview-copy { flex: 1; min-width: 0; }
+    .overview-copy h3 { margin: 0; font-size: 14px; font-weight: 600; }
+    .overview-copy p { margin: 5px 0 0; color: var(--label-secondary); font-size: 12px; }
+    .overview-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; }
+    .stat { padding: 12px; border-radius: 10px; background: var(--bg-hover); }
+    .stat b { display: block; font-size: 18px; font-weight: 600; }
+    .stat span { color: var(--label-secondary); font-size: 11px; }
+
+    .btn { height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 14px; border: 0; border-radius: 18px; background: transparent; white-space: nowrap; }
+    .btn:hover { background: var(--bg-hover); }
+    .btn.primary { background: #111318; color: #fff; }
+    .btn.primary:hover { background: #292c33; }
+    .btn.outline { border: .5px solid var(--border-l3); }
+    .btn.small { height: 30px; padding: 0 11px; border-radius: 15px; font-size: 12px; }
+    .icon-btn { width: 32px; height: 32px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 9px; background: transparent; }
+    .icon-btn:hover { background: var(--bg-hover); }
+    input, select { min-height: 36px; padding: 7px 10px; border: 1px solid var(--border-l2); border-radius: 8px; background: var(--bg-layer-1); }
+    .hidden { display: none !important; }
+
+    .graph-dialog { position: relative; z-index: 1; width: min(1120px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px)); display: flex; flex-direction: column; overflow: hidden; border-radius: 24px; background: var(--bg-layer-2); box-shadow: var(--shadow-float); }
+    .graph-header { flex: none; min-height: 66px; display: flex; align-items: center; gap: 12px; padding: 14px 14px 14px 22px; border-bottom: 1px solid var(--border-l2); }
+    .graph-title { flex: 1; min-width: 0; }
+    .graph-title h2 { display: flex; align-items: center; gap: 9px; margin: 0; font-size: 16px; line-height: 24px; font-weight: 550; }
+    .graph-title p { margin: 2px 0 0 25px; color: var(--label-secondary); font-size: 12px; }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+    .scope-pill { max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
+
+    .graph-toolbar { flex: none; display: flex; align-items: center; gap: 8px; min-height: 56px; padding: 10px 18px; border-bottom: 1px solid var(--border-l2); }
+    .search { position: relative; flex: 1 1 280px; min-width: 180px; max-width: 390px; }
+    .search input { width: 100%; padding-left: 34px; padding-right: 34px; }
+    .search .icon { position: absolute; left: 11px; top: 10px; color: var(--label-tertiary); }
+    .search-clear { position: absolute; right: 5px; top: 3px; width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--label-tertiary); }
+    .search-clear:hover { background: var(--bg-hover); color: var(--label-primary); }
+    .segmented { display: flex; padding: 3px; border: 1px solid var(--border-l2); border-radius: 18px; background: var(--bg-hover); }
+    .segmented button { height: 28px; padding: 0 10px; border: 0; border-radius: 14px; background: transparent; color: var(--label-secondary); font-size: 12px; }
+    .segmented button.active { background: var(--bg-layer-1); color: var(--label-primary); box-shadow: 0 1px 3px rgba(0,0,0,.08); font-weight: 600; }
+    .check { height: 34px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border-radius: 8px; color: var(--label-secondary); font-size: 12px; white-space: nowrap; }
+    .check:hover { background: var(--bg-hover); }
+    .check input { width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: #111318; }
+    .time-filter { flex: none; display: grid; grid-template-columns: auto 1fr 1fr auto; align-items: end; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border-l2); background: var(--bg-canvas); }
+    .time-filter .caption { align-self: center; color: var(--label-secondary); font-size: 12px; }
+    .field { display: grid; gap: 5px; }
+    .field label { color: var(--label-secondary); font-size: 11px; }
+
+    .graph-body { position: relative; min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 316px; }
+    .canvas-shell { position: relative; min-width: 0; min-height: 0; overflow: hidden; background-color: var(--bg-canvas); background-image: radial-gradient(circle, rgba(15,17,21,.075) .7px, transparent .8px); background-size: 22px 22px; }
+    .canvas-scroller { position: absolute; inset: 0; overflow: auto; cursor: grab; }
+    .canvas-scroller.dragging { cursor: grabbing; }
+    .graph-stage { position: relative; width: 760px; height: 520px; transform-origin: 0 0; transition: transform 160ms ease; }
+    #edge-layer { position: absolute; inset: 0; width: 760px; height: 520px; overflow: visible; }
+    .edge { fill: none; stroke: #a7adb5; stroke-width: 1.4; marker-end: url(#arrow); transition: opacity 140ms ease, stroke 140ms ease, stroke-width 140ms ease; }
+    .edge.pending { stroke: #c18a22; stroke-dasharray: 6 5; }
+    .edge.selected { stroke: #111318; stroke-width: 2.2; }
+    .edge.muted { opacity: .18; }
+    .edge-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+    .edge-label { fill: var(--label-secondary); font-size: 10px; paint-order: stroke; stroke: var(--bg-canvas); stroke-width: 5px; stroke-linejoin: round; pointer-events: none; }
+    .graph-node { position: absolute; width: 154px; min-height: 62px; padding: 10px 11px; border: 1px solid var(--border-l3); border-radius: 12px; background: var(--bg-layer-1); box-shadow: 0 1px 3px rgba(15,17,21,.04); text-align: left; transition: opacity 140ms ease, box-shadow 140ms ease, border-color 140ms ease, transform 140ms ease; }
+    .graph-node:hover { border-color: rgba(0,0,0,.32); box-shadow: 0 4px 14px rgba(15,17,21,.08); }
+    .graph-node.selected { border-color: #111318; box-shadow: 0 0 0 1px #111318, 0 6px 18px rgba(15,17,21,.12); }
+    .graph-node.muted { opacity: .24; }
+    .node-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; color: var(--label-secondary); font-size: 10px; }
+    .node-glyph { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 6px; background: var(--bg-hover); color: var(--label-secondary); }
+    .node-title { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 12px; line-height: 18px; font-weight: 550; }
+    .layer-chip { margin-left: auto; padding: 1px 5px; border-radius: 5px; }
+    .layer-chip.working { color: var(--amber); background: var(--amber-soft); }
+    .layer-chip.episodic { color: var(--blue); background: var(--blue-soft); }
+    .layer-chip.semantic { color: var(--violet); background: var(--violet-soft); }
+    .layer-chip.procedural { color: var(--blue); background: var(--blue-soft); }
+    .graph-node.source { width: 132px; min-height: 52px; border-style: dashed; color: var(--label-secondary); }
+    .graph-node.pending { border-color: #d9ad56; }
+    .canvas-badge { position: absolute; left: 14px; top: 14px; display: flex; gap: 6px; align-items: center; padding: 6px 9px; border: 1px solid var(--border-l2); border-radius: 9px; background: rgba(255,255,255,.9); color: var(--label-secondary); font-size: 11px; backdrop-filter: blur(5px); }
+    .canvas-tools { position: absolute; right: 14px; bottom: 14px; display: flex; padding: 3px; border: 1px solid var(--border-l2); border-radius: 11px; background: rgba(255,255,255,.94); box-shadow: 0 2px 8px rgba(15,17,21,.06); }
+    .canvas-tools button { width: 32px; height: 30px; border: 0; border-radius: 8px; background: transparent; }
+    .canvas-tools button:hover { background: var(--bg-hover); }
+    .legend { position: absolute; left: 14px; bottom: 14px; display: flex; flex-wrap: wrap; gap: 10px; max-width: calc(100% - 170px); padding: 7px 10px; border: 1px solid var(--border-l2); border-radius: 10px; background: rgba(255,255,255,.94); color: var(--label-secondary); font-size: 10px; backdrop-filter: blur(5px); }
+    .legend-item { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 3px; background: var(--bg-active); border: 1px solid var(--border-l3); }
+    .legend-line { width: 14px; border-top: 1.5px solid #a7adb5; }
+    .legend-line.pending { border-top-style: dashed; border-color: #c18a22; }
+    .empty-search { position: absolute; inset: 0; display: none; place-items: center; color: var(--label-secondary); font-size: 13px; }
+
+    .inspector { min-width: 0; overflow: auto; border-left: 1px solid var(--border-l2); background: var(--bg-layer-1); }
+    .inspector-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; min-height: 52px; padding: 10px 14px 10px 16px; border-bottom: 1px solid var(--border-l2); background: var(--bg-layer-1); }
+    .inspector-head b { font-size: 13px; font-weight: 600; }
+    .inspector-body { display: flex; flex-direction: column; gap: 18px; padding: 16px; }
+    .inspector-title { margin: 0; font-size: 17px; line-height: 25px; font-weight: 600; text-wrap: pretty; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { padding: 3px 7px; border-radius: 6px; background: var(--bg-hover); color: var(--label-secondary); font-size: 11px; }
+    .chip.blue { color: var(--blue); background: var(--blue-soft); }
+    .chip.amber { color: var(--amber); background: var(--amber-soft); }
+    .detail-section { display: grid; gap: 8px; }
+    .detail-section h4 { margin: 0; color: var(--label-secondary); font-size: 11px; font-weight: 500; }
+    .detail-section p { margin: 0; font-size: 12px; line-height: 19px; }
+    .evidence { padding: 11px 12px; border-radius: 9px; background: var(--bg-hover); font-size: 12px; line-height: 19px; }
+    .relation-list { display: grid; gap: 7px; }
+    .relation-item { padding: 9px 10px; border: 1px solid var(--border-l2); border-radius: 9px; background: var(--bg-layer-1); font-size: 11px; text-align: left; }
+    .relation-item:hover { background: var(--bg-hover); }
+    .inspector-empty { height: 100%; display: grid; place-items: center; padding: 28px; color: var(--label-secondary); text-align: center; font-size: 12px; }
+    .graph-footer { flex: none; min-height: 46px; display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-top: 1px solid var(--border-l2); color: var(--label-secondary); font-size: 11px; }
+    .graph-footer .spacer { flex: 1; }
+    .kbd { padding: 1px 5px; border: 1px solid var(--border-l2); border-bottom-color: var(--border-l3); border-radius: 5px; background: var(--bg-hover); color: var(--label-secondary); font: 10px/16px var(--font); }
+    .toast { position: fixed; z-index: 50; left: 50%; bottom: 26px; transform: translate(-50%, 14px); padding: 9px 14px; border-radius: 18px; background: #111318; color: white; box-shadow: var(--shadow-float); opacity: 0; pointer-events: none; transition: 160ms ease; font-size: 12px; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (max-width: 900px) {
+      .graph-layer { padding: 12px; }
+      .graph-dialog { width: calc(100vw - 24px); height: calc(100vh - 24px); border-radius: 20px; }
+      .graph-body { grid-template-columns: minmax(0, 1fr); }
+      .inspector { position: absolute; z-index: 5; right: 0; top: 0; bottom: 0; width: min(340px, 86vw); box-shadow: -8px 0 24px rgba(15,17,21,.10); }
+      .graph-toolbar { flex-wrap: wrap; }
+      .search { max-width: none; }
+      .time-filter { grid-template-columns: 1fr 1fr; }
+      .time-filter .caption { grid-column: 1 / -1; }
+    }
+    @media (max-width: 780px) {
+      .graph-toolbar .search { flex-basis: 100%; }
+    }
+    @media (max-width: 620px) {
+      .app { grid-template-columns: 64px minmax(0,1fr); }
+      .brand span, .side-title, .side-row span { display: none; }
+      .settings-panel { max-width: none; width: calc(100vw - 20px); height: calc(100vh - 20px); border-radius: 22px; }
+      .settings-nav { flex-basis: 64px; padding-inline: 10px; }
+      .nav-cell { width: 44px; justify-content: center; padding: 0; }
+      .graph-layer { padding: 0; }
+      .graph-dialog { width: 100vw; height: 100vh; border-radius: 0; }
+      .graph-header { padding-left: 14px; }
+      .graph-title p, .scope-pill { display: none; }
+      .graph-toolbar { padding: 8px 10px; }
+      .search { flex-basis: 100%; }
+      .check.sources { display: none; }
+      .legend { max-width: calc(100% - 28px); bottom: 58px; }
+      .graph-footer .help { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="app" aria-hidden="true">
+    <aside class="app-sidebar">
+      <div class="brand"><span class="brand-mark">DS</span><span>deepseek</span></div>
+      <div class="side-title">工作区</div>
+      <button class="side-row active"><svg class="icon" viewBox="0 0 24 24"><path d="M4 6h6l2 2h8v10H4z"></path></svg><span>示例工作区</span></button>
+    </aside>
+    <main class="app-main"><div class="hero"><div class="hero-inner"><h1>探索未至之境</h1><span>选择一个工作区开始</span></div></div></main>
+  </div>
+
+  <div class="settings-layer" aria-hidden="true">
+    <div class="mask"></div>
+    <section class="settings-panel">
+      <nav class="settings-nav">
+        <div class="settings-title">设置</div>
+        <div class="nav-list">
+          <button class="nav-cell"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A8 8 0 0 0 15 6l-.3-2.6h-4L10.4 6A8 8 0 0 0 8 7.1l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1A8 8 0 0 0 10.4 18l.3 2.6h4L15 18a8 8 0 0 0 2.4-1.1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .2-1z"></path></svg><span>通用设置</span></button>
+          <button class="nav-cell"><svg class="icon" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3 1.1 0 2.1-.1 3-.3"></path></svg><span>模型</span></button>
+          <button class="nav-cell"><svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"></path></svg><span>插件</span></button>
+          <button class="nav-cell"><svg class="icon" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"></circle><circle cx="16" cy="16" r="3"></circle><path d="M10 10l4 4M16 5v3h3M5 16v3h3"></path></svg><span>Agent 预设</span></button>
+          <button class="nav-cell active"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M4 12a8 8 0 1 0 16 0 8 8 0 1 0-16 0M12 4v5M12 15v5M4 12h5M15 12h5"></path></svg><span>记忆</span></button>
+        </div>
+      </nav>
+      <div class="settings-content">
+        <div class="settings-header"><button class="btn outline small">打开配置文件</button><button class="icon-btn" aria-label="关闭设置"><svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
+        <div class="settings-options">
+          <div class="section-heading"><h2>agentOS context</h2><p>从记忆和文档到关系、来源与历史</p></div>
+          <div class="scope-row"><select aria-label="记忆范围"><option>local:default · 4</option></select><button class="btn small">关闭</button></div>
+          <div class="tabs"><button class="tab">记忆</button><button class="tab">知识库</button><button class="tab active">图谱</button><button class="tab">待确认</button><button class="tab">设置</button></div>
+          <div class="overview">
+            <div class="overview-head">
+              <div class="overview-copy"><h3>关系图谱</h3><p>查看记忆、业务对象与来源之间的关系。完整画布会在独立窗口中打开。</p></div>
+              <button class="btn primary" id="reopen-graph"><svg class="icon" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2"></circle><circle cx="18" cy="6" r="2"></circle><circle cx="18" cy="18" r="2"></circle><path d="M8 11l8-4M8 13l8 4"></path></svg>打开图谱</button>
+            </div>
+            <div class="overview-stats"><div class="stat"><b>6</b><span>业务对象</span></div><div class="stat"><b>7</b><span>关系</span></div><div class="stat"><b>2</b><span>待确认</span></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="graph-layer" id="graph-layer">
+    <div class="mask" id="graph-mask"></div>
+    <section class="graph-dialog" role="dialog" aria-modal="true" aria-labelledby="graph-dialog-title" data-screen-label="图谱二级弹窗">
+      <header class="graph-header">
+        <div class="graph-title">
+          <h2 id="graph-dialog-title"><span class="live-dot"></span>记忆图谱</h2>
+          <p id="graph-summary">6 个对象 · 7 条关系 · 默认隐藏来源节点</p>
+        </div>
+        <button class="btn outline small scope-pill" title="当前范围">local:default</button>
+        <button class="icon-btn" id="close-graph" aria-label="关闭图谱"><svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </header>
+      <div class="graph-toolbar">
+        <label class="search" aria-label="搜索图谱">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg>
+          <input id="graph-search" placeholder="搜索对象、关系或记忆内容" autocomplete="off">
+          <button class="search-clear hidden" id="search-clear" aria-label="清除搜索">×</button>
+        </label>
+        <div class="segmented" role="group" aria-label="展开层数">
+          <button data-depth="1">一层</button><button data-depth="2" class="active">两层</button><button data-depth="3">三层</button>
+        </div>
+        <label class="check"><input id="pending-toggle" type="checkbox">待确认</label>
+        <label class="check sources"><input id="source-toggle" type="checkbox">来源</label>
+        <button class="btn outline small" id="filter-toggle"><svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"></path></svg>筛选</button>
+        <button class="icon-btn" id="refresh" aria-label="刷新图谱"><svg class="icon" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6.1 8a7 7 0 0 1 11.7-2L20 8M4 16l2.2 2a7 7 0 0 0 11.7-2"></path></svg></button>
+      </div>
+      <div class="time-filter hidden" id="time-filter">
+        <div class="caption">查看历史状态</div>
+        <div class="field"><label for="known-at">系统所知时间</label><input id="known-at" type="datetime-local"></div>
+        <div class="field"><label for="valid-at">事实生效时间</label><input id="valid-at" type="datetime-local"></div>
+        <button class="btn small" id="reset-time">回到当前</button>
+      </div>
+      <div class="graph-body">
+        <div class="canvas-shell">
+          <div class="canvas-scroller" id="canvas-scroller">
+            <div class="graph-stage" id="graph-stage">
+              <svg id="edge-layer" viewBox="0 0 760 520" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10" fill="#a7adb5"></path></marker></defs></svg>
+              <div id="node-layer"></div>
+            </div>
+          </div>
+          <div class="canvas-badge" id="canvas-badge"><span class="live-dot"></span>已聚焦：Atlas 工作区重置</div>
+          <div class="legend"><span class="legend-item"><i class="legend-dot"></i>对象 / 记忆</span><span class="legend-item"><i class="legend-line"></i>已确认</span><span class="legend-item"><i class="legend-line pending"></i>待确认</span><span class="legend-item">选择节点可查看依据</span></div>
+          <div class="canvas-tools" aria-label="画布缩放"><button id="zoom-out" aria-label="缩小">−</button><button id="zoom-fit" aria-label="适合窗口">⌂</button><button id="zoom-in" aria-label="放大">＋</button></div>
+          <div class="empty-search" id="empty-search">没有匹配的对象或关系，请调整搜索条件。</div>
+        </div>
+        <aside class="inspector" id="inspector" aria-label="图谱详情"></aside>
+      </div>
+      <footer class="graph-footer"><span id="result-count">当前显示 4 个对象、4 条关系</span><span class="spacer"></span><span class="help"><span class="kbd">单击</span> 查看详情　<span class="kbd">双击</span> 聚焦邻居　<span class="kbd">Esc</span> 关闭</span></footer>
+    </section>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const $ = (selector) => document.querySelector(selector);
+      const icons = {
+        project: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"></path></svg>',
+        requirement: '<svg class="icon" viewBox="0 0 24 24"><path d="M7 4h10v16H7zM9.5 8h5M9.5 12h5M9.5 16h3"></path></svg>',
+        constraint: '<svg class="icon" viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V7zM9 12l2 2 4-5"></path></svg>',
+        api: '<svg class="icon" viewBox="0 0 24 24"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"></path></svg>',
+        person: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"></circle><path d="M6 20c.5-4 2.5-6 6-6s5.5 2 6 6"></path></svg>',
+        decision: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"></circle><path d="M9 12l2 2 4-5"></path></svg>',
+        source: '<svg class="icon" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM14 3v4h4M9 12h6M9 16h5"></path></svg>'
+      };
+      const nodes = [
+        { id: 'project', title: 'Atlas 工作区重置', type: 'project', typeLabel: 'Project', layer: 'semantic', layerLabel: '语义', depth: 0, desc: '当前范围的核心项目对象，连接需求、约束、接口和决策。', evidence: '由 DEMO-042 需求说明和 09-18 评审纪要共同识别。' },
+        { id: 'requirement', title: '重置前保留未提交内容', type: 'requirement', typeLabel: 'Requirement', layer: 'semantic', layerLabel: '语义', depth: 1, desc: '执行工作区重置前，应先提示并保留用户未提交的内容。', evidence: 'DEMO-042 §4.2：重置动作必须经过用户明确确认。' },
+        { id: 'constraint', title: '需要用户二次确认', type: 'constraint', typeLabel: 'Constraint', layer: 'procedural', layerLabel: '程序', depth: 1, desc: '高影响动作需要明确的二次确认，不允许后台静默执行。', evidence: '评审纪要 2026-09-18 · 风险控制结论。', pending: true },
+        { id: 'api', title: 'POST /workspace/reset', type: 'api', typeLabel: 'API', layer: 'procedural', layerLabel: '程序', depth: 1, desc: '执行工作区重置的服务接口；接口对象与需求对象保持独立。', evidence: '接口设计草案 v3 · reset endpoint。' },
+        { id: 'decision', title: '默认采用软重置', type: 'decision', typeLabel: 'Decision', layer: 'episodic', layerLabel: '情节', depth: 2, desc: '当前版本默认使用可恢复的软重置方案。', evidence: '09-18 评审纪要中的阶段性决策。' },
+        { id: 'owner', title: '平台工程组', type: 'person', typeLabel: 'Owner', layer: 'working', layerLabel: '工作', depth: 2, desc: '负责工作区重置能力的维护与发布验证。', evidence: 'DEMO-042 项目元数据。' },
+        { id: 'source-req', title: 'DEMO-042 §4.2', type: 'source', typeLabel: '来源', depth: 2, source: true, desc: '需求原始片段。', evidence: '原始资料保持只读。' },
+        { id: 'source-review', title: '评审纪要 09-18', type: 'source', typeLabel: '来源', depth: 2, source: true, desc: '评审过程记录。', evidence: '原始资料保持只读。' }
+      ];
+      const edges = [
+        { id: 'e1', from: 'project', to: 'requirement', label: '具有需求', status: 'confirmed', quote: 'Atlas 项目包含工作区重置需求。' },
+        { id: 'e2', from: 'project', to: 'constraint', label: '具有约束', status: 'pending', quote: '需要确认该约束是否适用于所有重置入口。' },
+        { id: 'e3', from: 'requirement', to: 'api', label: '对应接口', status: 'confirmed', quote: '重置需求由 POST /workspace/reset 承载。' },
+        { id: 'e4', from: 'constraint', to: 'decision', label: '形成决策', status: 'confirmed', quote: '评审决定默认采用可恢复的软重置。' },
+        { id: 'e5', from: 'project', to: 'owner', label: '由其负责', status: 'confirmed', quote: '平台工程组负责发布验证。' },
+        { id: 'e6', from: 'requirement', to: 'source-req', label: '来源于', status: 'confirmed', quote: 'DEMO-042 §4.2' },
+        { id: 'e7', from: 'decision', to: 'source-review', label: '来源于', status: 'confirmed', quote: '评审纪要 09-18' }
+      ];
+      const relationPositions = { project:[300,215], requirement:[70,85], constraint:[70,330], api:[540,70], decision:[540,330], owner:[300,420], 'source-req':[570,175], 'source-review':[570,435] };
+      const layeredPositions = { project:[70,220], requirement:[290,80], constraint:[290,220], api:[510,65], decision:[510,220], owner:[290,370], 'source-req':[510,370], 'source-review':[510,445] };
+      const state = { depth: 2, pending: false, sources: false, query: '', selected: { kind:'node', id:'project' }, zoom: 1, layout:'relation' };
+      let toastTimer;
+
+      const visibleNodes = () => nodes.filter(n => n.depth <= state.depth && (state.sources || !n.source) && (state.pending || !n.pending));
+      const matchingIds = () => {
+        const q = state.query.trim().toLocaleLowerCase();
+        if (!q) return new Set(visibleNodes().map(n => n.id));
+        const ids = new Set();
+        for (const n of visibleNodes()) if (`${n.title} ${n.typeLabel} ${n.desc}`.toLocaleLowerCase().includes(q)) ids.add(n.id);
+        for (const e of edges) if (`${e.label} ${e.quote}`.toLocaleLowerCase().includes(q)) { ids.add(e.from); ids.add(e.to); }
+        return ids;
+      };
+      const selectedNeighbors = () => {
+        if (state.selected?.kind !== 'node') return null;
+        const ids = new Set([state.selected.id]);
+        for (const e of edges) if (e.from === state.selected.id || e.to === state.selected.id) { ids.add(e.from); ids.add(e.to); }
+        return ids;
+      };
+      function showToast(message) {
+        const toast = $('#toast'); toast.textContent = message; toast.classList.add('show');
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+      }
+      function pathBetween(a, b) {
+        const x1=a[0]+154, y1=a[1]+31, x2=b[0], y2=b[1]+31, bend=(x1+x2)/2;
+        return `M${x1} ${y1} C${bend} ${y1},${bend} ${y2},${x2} ${y2}`;
+      }
+      function renderInspector() {
+        const root = $('#inspector');
+        if (!state.selected) { root.innerHTML='<div class="inspector-empty">选择一个对象或关系，查看它的含义、来源和历史。</div>'; return; }
+        if (state.selected.kind === 'edge') {
+          const edge = edges.find(e=>e.id===state.selected.id); const from=nodes.find(n=>n.id===edge.from); const to=nodes.find(n=>n.id===edge.to);
+          root.innerHTML=`<div class="inspector-head"><b>关系详情</b><button class="icon-btn" data-clear aria-label="收起详情">×</button></div><div class="inspector-body"><div class="chips"><span class="chip ${edge.status==='pending'?'amber':'blue'}">${edge.status==='pending'?'待确认':'已确认'}</span><span class="chip">${edge.label}</span></div><h3 class="inspector-title">${from.title}<br>→ ${to.title}</h3><div class="detail-section"><h4>关系含义</h4><p>${edge.label}</p></div><div class="detail-section"><h4>支持依据</h4><div class="evidence">${edge.quote}</div></div><button class="btn outline" data-action="evidence">查看完整依据</button></div>`;
+        } else {
+          const node=nodes.find(n=>n.id===state.selected.id); const related=edges.filter(e=>e.from===node.id||e.to===node.id);
+          root.innerHTML=`<div class="inspector-head"><b>对象详情</b><button class="icon-btn" data-clear aria-label="收起详情">×</button></div><div class="inspector-body"><div class="chips"><span class="chip blue">${node.typeLabel}</span>${node.layer?`<span class="chip">${node.layerLabel}记忆</span>`:''}${node.pending?'<span class="chip amber">待确认</span>':''}</div><h3 class="inspector-title">${node.title}</h3><div class="detail-section"><h4>当前说明</h4><p>${node.desc}</p></div><div class="detail-section"><h4>来源依据</h4><div class="evidence">${node.evidence}</div></div><div class="detail-section"><h4>直接关系 · ${related.length}</h4><div class="relation-list">${related.map(e=>{const other=nodes.find(n=>n.id===(e.from===node.id?e.to:e.from));return `<button class="relation-item" data-edge="${e.id}"><b>${e.label}</b><br>${other.title}</button>`}).join('')}</div></div><button class="btn primary" data-action="memory">在记忆中打开</button></div>`;
+        }
+      }
+      function renderGraph() {
+        const pos = state.layout==='relation' ? relationPositions : layeredPositions;
+        const visible = visibleNodes(); const ids=new Set(visible.map(n=>n.id)); const matches=matchingIds(); const neighbor=selectedNeighbors();
+        const shownEdges=edges.filter(e=>ids.has(e.from)&&ids.has(e.to)&&(state.pending||e.status!=='pending'));
+        $('#node-layer').innerHTML=visible.map(n=>{
+          const p=pos[n.id];
+          // 搜索是用户当前最明确的意图：有查询时仅按命中结果降噪，
+          // 无查询时才使用“选中节点的一跳关系”聚焦。
+          const muted=state.query ? !matches.has(n.id) : (neighbor&&!neighbor.has(n.id));
+          return `<button class="graph-node ${n.source?'source':''} ${n.pending?'pending':''} ${state.selected?.kind==='node'&&state.selected.id===n.id?'selected':''} ${muted?'muted':''}" data-node="${n.id}" style="left:${p[0]}px;top:${p[1]}px"><span class="node-top"><span class="node-glyph">${icons[n.type]}</span>${n.typeLabel}${n.layer?`<span class="layer-chip ${n.layer}">${n.layerLabel}</span>`:''}</span><span class="node-title">${n.title}</span></button>`;
+        }).join('');
+        $('#edge-layer').innerHTML='<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10" fill="#a7adb5"></path></marker></defs>'+shownEdges.map(e=>{
+          const a=pos[e.from],b=pos[e.to],d=pathBetween(a,b), selected=state.selected?.kind==='edge'&&state.selected.id===e.id;
+          const muted=state.query
+            ? !matches.has(e.from)&&!matches.has(e.to)
+            : neighbor&&!neighbor.has(e.from)&&!neighbor.has(e.to);
+          const mx=(a[0]+154+b[0])/2,my=(a[1]+b[1])/2+26;
+          return `<g data-edge="${e.id}" tabindex="0" role="button" aria-label="关系：${e.label}"><path class="edge-hit" d="${d}"></path><path class="edge ${e.status==='pending'?'pending':''} ${selected?'selected':''} ${muted?'muted':''}" d="${d}"></path><text class="edge-label" x="${mx}" y="${my}" text-anchor="middle">${e.label}</text></g>`;
+        }).join('');
+        $('#graph-stage').style.transform=`scale(${state.zoom})`;
+        $('#empty-search').style.display=matches.size===0?'grid':'none';
+        $('#result-count').textContent=`当前显示 ${visible.filter(n=>matches.has(n.id)).length} 个对象、${shownEdges.length} 条关系`;
+        const selectedNode=state.selected?.kind==='node'&&nodes.find(n=>n.id===state.selected.id);
+        $('#canvas-badge').innerHTML=selectedNode?`<span class="live-dot"></span>已聚焦：${selectedNode.title}`:'浏览全部对象';
+        $('#graph-summary').textContent=`${visible.length} 个对象 · ${shownEdges.length} 条关系 · ${state.sources?'已显示':'默认隐藏'}来源节点`;
+        renderInspector();
+      }
+      function openGraph(){ $('#graph-layer').classList.remove('hidden'); setTimeout(()=>$('#close-graph').focus(),0); }
+      function closeGraph(){ $('#graph-layer').classList.add('hidden'); $('#reopen-graph').focus(); }
+      $('#close-graph').addEventListener('click',closeGraph); $('#graph-mask').addEventListener('click',closeGraph); $('#reopen-graph').addEventListener('click',openGraph);
+      document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#graph-layer').classList.contains('hidden'))closeGraph();if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f'&&!$('#graph-layer').classList.contains('hidden')){e.preventDefault();$('#graph-search').focus();}});
+      document.querySelectorAll('[data-depth]').forEach(btn=>btn.addEventListener('click',()=>{state.depth=Number(btn.dataset.depth);document.querySelectorAll('[data-depth]').forEach(x=>x.classList.toggle('active',x===btn));renderGraph();}));
+      $('#pending-toggle').addEventListener('change',e=>{state.pending=e.target.checked;renderGraph();});
+      $('#source-toggle').addEventListener('change',e=>{state.sources=e.target.checked;renderGraph();});
+      $('#graph-search').addEventListener('input',e=>{state.query=e.target.value;$('#search-clear').classList.toggle('hidden',!state.query);renderGraph();});
+      $('#graph-search').addEventListener('keydown',e=>{if(e.key==='Enter'){const first=[...matchingIds()][0];if(first){state.selected={kind:'node',id:first};renderGraph();}}});
+      $('#search-clear').addEventListener('click',()=>{state.query='';$('#graph-search').value='';$('#search-clear').classList.add('hidden');renderGraph();$('#graph-search').focus();});
+      $('#filter-toggle').addEventListener('click',()=>$('#time-filter').classList.toggle('hidden'));
+      $('#reset-time').addEventListener('click',()=>{$('#known-at').value='';$('#valid-at').value='';showToast('已回到当前状态');});
+      $('#known-at').addEventListener('change',()=>showToast('已切换系统所知时间（原型）')); $('#valid-at').addEventListener('change',()=>showToast('已切换事实生效时间（原型）'));
+      $('#refresh').addEventListener('click',()=>showToast('图谱已刷新'));
+      $('#zoom-in').addEventListener('click',()=>{state.zoom=Math.min(1.4,state.zoom+.1);renderGraph();}); $('#zoom-out').addEventListener('click',()=>{state.zoom=Math.max(.7,state.zoom-.1);renderGraph();}); $('#zoom-fit').addEventListener('click',()=>{state.zoom=1;$('#canvas-scroller').scrollTo(0,0);renderGraph();});
+      $('#node-layer').addEventListener('click',e=>{const n=e.target.closest('[data-node]');if(!n)return;state.selected={kind:'node',id:n.dataset.node};renderGraph();});
+      $('#node-layer').addEventListener('dblclick',e=>{const n=e.target.closest('[data-node]');if(!n)return;state.selected={kind:'node',id:n.dataset.node};state.depth=1;document.querySelectorAll('[data-depth]').forEach(x=>x.classList.toggle('active',x.dataset.depth==='1'));renderGraph();showToast('已聚焦一跳关系');});
+      $('#edge-layer').addEventListener('click',e=>{const g=e.target.closest('[data-edge]');if(!g)return;state.selected={kind:'edge',id:g.dataset.edge};renderGraph();});
+      $('#edge-layer').addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const g=e.target.closest('[data-edge]');if(g){e.preventDefault();state.selected={kind:'edge',id:g.dataset.edge};renderGraph();}});
+      $('#inspector').addEventListener('click',e=>{if(e.target.closest('[data-clear]')){state.selected=null;renderGraph();return;}const rel=e.target.closest('[data-edge]');if(rel){state.selected={kind:'edge',id:rel.dataset.edge};renderGraph();return;}if(e.target.closest('[data-action="memory"]'))showToast('正式实现会返回“记忆”并打开对应记录');if(e.target.closest('[data-action="evidence"]'))showToast('正式实现会打开来源与历史记录');});
+      renderGraph();
+    })();
+  </script>
+</body>
+</html>

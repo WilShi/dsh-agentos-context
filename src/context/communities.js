@@ -45,7 +45,38 @@ export function detectGraphCommunities(graph){
    if(!moved)break;
   }
  }
- const groups=new Map();for(const node of nodes){const key=membership.get(node.id);const members=groups.get(key)??[];members.push(node);groups.set(key,members);}
+ // Louvain leaves isolated or tiny components as their own groups. Fold any
+ // community below MIN_COMMUNITY_SIZE into its strongest neighbour (or one
+ // shared bucket when it has no edge) so a sparse graph does not render one
+ // community per node (HOST-REVIEW M3).
+ const MIN_COMMUNITY_SIZE=3;
+ const groupOf=new Map(nodes.map(node=>[node.id,membership.get(node.id)]));
+ const sizes=new Map();for(const key of groupOf.values())sizes.set(key,(sizes.get(key)??0)+1);
+ const communityAdjacency=new Map();
+ for(const edge of graph?.edges??[]){
+  if(!ids.has(edge.source)||!ids.has(edge.target))continue;
+  const a=groupOf.get(edge.source),b=groupOf.get(edge.target);if(a===b)continue;
+  const weight=edgeWeight(edge);
+  const forward=communityAdjacency.get(a)??new Map();forward.set(b,(forward.get(b)??0)+weight);communityAdjacency.set(a,forward);
+  const backward=communityAdjacency.get(b)??new Map();backward.set(a,(backward.get(a)??0)+weight);communityAdjacency.set(b,backward);
+ }
+ const isolatedKey='community:isolated';
+ const smallKeys=[...sizes.entries()].filter(([,size])=>size<MIN_COMMUNITY_SIZE).map(([key])=>key).sort((a,b)=>(sizes.get(a)??0)-(sizes.get(b)??0)||String(a).localeCompare(String(b)));
+ for(const key of smallKeys){
+  if(!sizes.has(key))continue; // already folded into an earlier target
+  const neighbours=communityAdjacency.get(key);
+  let target=null,bestWeight=-1;
+  if(neighbours)for(const [candidate,weight] of [...neighbours].sort(([a],[b])=>String(a).localeCompare(String(b)))){
+   if(candidate===key)continue;
+   const candidateSize=sizes.get(candidate)??0;
+   const better=weight>bestWeight||(weight===bestWeight&&candidateSize>((target&&sizes.get(target))||0));
+   if(better){target=candidate;bestWeight=weight;}
+  }
+  if(target===null)target=isolatedKey;
+  for(const [nodeId,current] of groupOf)if(current===key)groupOf.set(nodeId,target);
+  sizes.set(target,(sizes.get(target)??0)+(sizes.get(key)??0));sizes.delete(key);
+ }
+ const groups=new Map();for(const node of nodes){const key=groupOf.get(node.id);const members=groups.get(key)??[];members.push(node);groups.set(key,members);}
  const communities=[];
  for(const members of groups.values()){
   members.sort((a,b)=>(degree.get(b.id)??0)-(degree.get(a.id)??0)||(b.importance??0)-(a.importance??0)||String(a.id).localeCompare(String(b.id)));

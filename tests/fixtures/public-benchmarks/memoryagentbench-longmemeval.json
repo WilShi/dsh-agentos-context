@@ -1,0 +1,56 @@
+{
+  "benchmark": "MemoryAgentBench / LongMemEval",
+  "source": "https://www.modelscope.cn/datasets/AI-ModelScope/MemoryAgentBench",
+  "upstream": "https://github.com/xiaowu0162/LongMemEval",
+  "license": "MIT",
+  "subset": "Accurate_Retrieval / longmemeval_s*",
+  "retrievalCases": [
+    {
+      "id": "multi-session-weekly-hours",
+      "questionType": "multi-session",
+      "question": "How many hours do I work in a typical week during peak campaign seasons?",
+      "answer": "50",
+      "evidence": [
+        "During peak campaign seasons, I increase my work hours by 10 hours weekly to accommodate the additional workload.",
+        "I usually work 40 hours a week, with some weeks being busier than others."
+      ]
+    },
+    {
+      "id": "temporal-seed-order",
+      "questionType": "temporal-reasoning",
+      "question": "Which seeds were started first, the tomatoes or the marigolds?",
+      "answer": "Tomatoes",
+      "evidence": [
+        "I just started some marigold seeds that arrived on March 3rd, and they're already germinating.",
+        "I've been starting seeds indoors under grow lights in my basement since February 20th - tomatoes, peppers, and cucumbers are all doing well."
+      ]
+    },
+    {
+      "id": "multi-session-aquarium-count",
+      "questionType": "multi-session",
+      "question": "How many fish are there in total in both of my aquariums?",
+      "answer": "17",
+      "evidence": [
+        "My new 20-gallon tank currently has 10 neon tetras, 5 golden honey gouramis, and a small pleco catfish.",
+        "My old 10-gallon tank has my betta fish, Bubbles."
+      ]
+    },
+    {
+      "id": "single-session-preference-cookie",
+      "questionType": "single-session-preference",
+      "question": "I've been feeling like my chocolate chip cookies need something extra. What ingredient have I already found adds a richer flavor?",
+      "answer": "turbinado sugar",
+      "evidence": [
+        "I've been experimenting with different types of sugar and found that turbinado sugar adds a richer flavor."
+      ]
+    }
+  ],
+  "revisionCase": {
+    "id": "knowledge-update-hilton-stays",
+    "questionType": "knowledge-update",
+    "question": "How many free night's stays can I redeem at any Hilton property with my accumulated points?",
+    "initial": "I've accumulated enough points for a single free night's stay at any Hilton property.",
+    "updated": "I've now accumulated enough points for two free night's stays at any Hilton property.",
+    "answer": "two"
+  }
+}

@@ -58,7 +58,10 @@ export function createBackendBridge({service,legacy,defaultScope,config={}}){
     if(near){metadata.candidateFor=near.id;origin.lifecycle='candidate';}
    }catch{/* consolidation must never block a memory write */}
   }
-  const result=service.saveMemory({scopeId,content:input.content,kind,metadata,...placement,...(key?{idempotencyKey:key}:{})}, {...origin,...placement});
+  const sessionId=typeof input.sessionId==='string'&&input.sessionId?input.sessionId:(typeof metadata.sessionId==='string'?metadata.sessionId:undefined);
+  // The session id lets the service authorize a trusted identity scope without
+  // weakening workspace access (HOST-REVIEW H2).
+  const result=service.saveMemory({scopeId,content:input.content,kind,metadata,...placement,...(sessionId?{sessionId}:{}),...(key?{idempotencyKey:key}:{})}, {...origin,...placement});
   return {ids:[result.id],revision:result.revision};
  };
  bridge.captureSource=async(input,opts)=>{const result=await bridge.remember(input,opts);return{id:result.ids[0]};};
@@ -69,13 +72,13 @@ export function createBackendBridge({service,legacy,defaultScope,config={}}){
  bridge.revise=async(input={},opts)=>{
   checkSignal(opts);const scopeId=scopeOf(input);const old=await service.getMemory({scopeId,id:input.id},opts);
   if(!old)throw error('NOT_FOUND','没有可访问的记忆');checkSignal(opts);
-  const updated=await service.reviseMemory({scopeId,id:input.id,expectedRevision:input.expectedRevision??old.revision,content:input.content,reason:input.reason||'通过记忆工具修订'}, {...opts,actorRole:'tool'});
+  const updated=await service.reviseMemory({scopeId,id:input.id,expectedRevision:input.expectedRevision??old.revision,content:input.content,reason:input.reason||'通过记忆工具修订',...(typeof input.sessionId==='string'&&input.sessionId?{sessionId:input.sessionId}:{})}, {...opts,actorRole:'tool'});
   return {deprecatedId:input.id,newId:updated.id,revision:updated.revision};
  };
  bridge.retire=async(input={},opts)=>{
   checkSignal(opts);const scopeId=scopeOf(input),old=await service.getMemory({scopeId,id:input.id},opts);
   if(!old)throw error('NOT_FOUND','没有可访问的记忆');checkSignal(opts);
-  const updated=await service.retireMemory({scopeId,id:input.id,expectedRevision:input.expectedRevision??old.revision,reason:input.reason||'通过记忆工具停止召回'},opts);
+  const updated=await service.retireMemory({scopeId,id:input.id,expectedRevision:input.expectedRevision??old.revision,reason:input.reason||'通过记忆工具停止召回',...(typeof input.sessionId==='string'&&input.sessionId?{sessionId:input.sessionId}:{})},opts);
   return {ok:true,revision:updated.revision};
  };
  bridge.captureInsight=async(input={},opts)=>{const out=await bridge.remember({...input,sourceType:'insight',metadata:{...input.metadata,category:input.category}},opts);return{id:out.ids[0]};};

@@ -5,7 +5,7 @@ description: "为 DSH Web 与 Desktop 配置提供自动记忆、分域召回、
 kind: "package-bundle"
 ---
 
-# @deepseek/dsh-agentos-context
+# @wilshi/dsh-agentos-context
 
 [English](README.md) | 中文
 
@@ -30,17 +30,19 @@ agentOS Context 为 DSH 配置增加自动长期记忆、分域召回、基于�
 DSH Web 和 Desktop 已通过 `dsh-web-app` 挂载此包。打开**设置 → 记忆**可以配置捕获、召回、嵌入、提炼和保留策略，也可以在记忆工作台中使用列表、图谱、审核和知识库视图。设置入口和对话页标签会跟随 DSH 当前语言。不包含 `dsh-web-app` 的配置可以显式启用或移除已安装的 bundle：
 
 ```text
-dsh plugin --profile <name> add @deepseek/dsh-agentos-context
-dsh plugin --profile <name> remove @deepseek/dsh-agentos-context
+dsh plugin --profile <name> add @wilshi/dsh-agentos-context
+dsh plugin --profile <name> remove @wilshi/dsh-agentos-context
 ```
 
-添加 bundle 会把当前实现挂到兼容的 `dsh-opencontext` Loader 行上。因此，官方设置服务会把旧设置区直接导入同一命名空间并保留原值；捕获、召回、嵌入、提炼、保留策略和范围等可编辑字段可以即时生效，无需重启插件。如果已安装包没有公开 `dsh.bundle.patch` 声明，命令会失败。
+添加 bundle 会把当前实现挂到兼容的 `dsh-opencontext` Loader 行上。因此，官方设置服务会把旧设置区直接导入同一命名空间并保留原值；标记为 volatile 的字段可以即时生效，无需重启插件，但部分 volatile 开关（例如自动记忆）只作用于当前进程，重启后恢复默认值，界面和配置说明应以持久化语义为准。设置中的显式值优先于环境变量，环境变量只提供未显式配置时的默认值。如果已安装包没有公开 `dsh.bundle.patch` 声明，命令会失败。
 
 ### 自动记忆与召回
 
 自动捕获人工提示默认开启，也可以关闭。配置模型可用时会提炼已接受的提示；提炼暂时失败时会保留一条低重要度工作记忆 24 小时，而不是丢弃提示。召回按 `run → agent → workspace → user → app → global` 顺序搜索已授权范围，将 run 记忆限制在一个会话内，并且只为已接受的用户查询注入有界证据。
 
-3+1 分层将工作、情景、语义和程序记忆与记忆类型分别存储。重复证据可以强化并晋升记录；近似冲突会成为审核候选，不会覆盖已确立事实。用户显式保存的本地内容会无损保留，包括类似凭据的文本；此包不做 DLP 扫描或自动脱敏。
+3+1 分层将工作、情景、语义和程序记忆与记忆类型分别存储。重复证据可以强化并晋升记录；近似冲突会成为审核候选，不会覆盖已确立事实。凭据形状的内容受到显式保护：自动捕获会整条跳过疑似密钥、令牌或私钥的提示，显式 save/revise/reinforce 会返回 `SECRET_REJECTED`，不会把这类内容送往提炼网关或写入 sidecar。日志脱敏覆盖常见 GitHub、AWS、GitLab、npm、PEM 和 Bearer/Basic 形式。普通本地内容仍无损保留。
+
+RPC 的 `local:`、`run:`、`session:` 等工作区范围保持可用；`user:`、`agent:`、`app:` 身份分区只允许当前可信会话身份或显式配置身份访问，`scopes` 和 `bootstrap` 也只返回可见分区。确有旧集成需要放宽时，可显式设置 `allowForeignScopeIds=true`（或 `AGENTOS_CONTEXT_ALLOW_FOREIGN_SCOPE_IDS`）恢复旧行为，但不建议用于多用户或远程环境。
 
 ### 知识库与文档解析
 
@@ -56,6 +58,8 @@ Desktop 中退出原生全屏会同步退出图谱全屏，即使没有 DOM 全�
 
 旧 OpenContext 记忆和文档引用保持只读输入，启动时不会重写。此包保留 `dsh-opencontext` 设置命名空间，读取兼容标识，并在展示 `memory_*`、`knowledge_*` 和 `context_*` 名称的同时保留可调用的 `oc_*` 别名。新修订、退役、使用轨迹和本体状态写入 agentOS Context sidecar；schema v1 sidecar 会增量迁移到 schema v2。
 
+sidecar 或原生 SQLite 依赖初始化失败时，插件会保持加载并明确报告 `STORE_UNAVAILABLE`，而不是让整个记忆插件消失；知识库的原生解析依赖按需加载。图谱统计区分 `truncated`（实际裁剪）与 `depthLimited`（用户限制的深度），默认按记录时间选择节点；孤立节点会合并到未聚类社区，避免一节点一社区。关系审核只允许 pending → confirmed/rejected；confirmed → rejected 记为撤回，rejected 不能再次直接确认。
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -64,7 +68,7 @@ Desktop 中退出原生全屏会同步退出图谱全屏，即使没有 DOM 全�
 <details>
 <summary>实现内部信息——点击展开</summary>
 
-bundle patch 插入一个双端 Cordis 包。Host 端打开兼容后端和 sidecar，注册通过认证的 `agentos-context/v1/*` RPC 路由、模型工具、运行时 skill 和 Agent 生命周期监听器。Client 端安装一级记忆设置入口和工作台视图。浏览器操作使用通过认证的 Connection RPC，不再使用旧的原始浏览器路由。弹窗视图统一使用共享 Client UI 组件处理焦点约束、Esc 关闭和关闭后的焦点恢复，此包只负责内容和布局。
+bundle patch 插入一个双端 Cordis 包。Host 端打开兼容后端和 sidecar，注册通过认证的 `agentos-context/v1/*` RPC 路由、模型工具、运行时 skill 和 Agent 生命周期监听器。Client 端安装一级记忆设置入口和工作台视图。浏览器操作使用通过认证的 Connection RPC，不再使用旧的原始浏览器路由。弹窗视图使用包内 UI 组件处理焦点约束、仅关闭栈顶弹窗的 Esc 行为和关闭后的焦点恢复，此包负责内容和布局。
 
 旧 OpenContext 存储在首次执行相关操作时才加载，不会因为 CLI 帮助或配置结构检查而提前加载。销毁未使用的兼容后端会关闭其自有文档存储，但不会初始化旧存储。
 

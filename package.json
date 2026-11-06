@@ -1,6 +1,6 @@
 {
   "name": "@wilshi/dsh-agentos-context",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "agentOS context — DSH-native, source-backed memory and ontology workspace (OpenContext compatible; community fork)",
   "type": "module",
   "license": "MIT",
@@ -12,13 +12,10 @@
     "url": "git+https://github.com/WilShi/dsh-agentos-context.git"
   },
   "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
-    },
+    ".": "./lib/index.js",
     "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
@@ -26,14 +23,14 @@
     "lib/client.js",
     "cordis.patch.yml",
     "README.md",
+    "README.zh.md",
     "LICENSE",
     "LICENSE.opencontext",
     "THIRD_PARTY_NOTICES.md",
     "prototype/index.html",
     "prototype/PROTOTYPE.md",
     "docs/CONTRACT.md",
-    "docs/IMPLEMENTATION-STATUS.md",
-    "lib/types/**/*.d.ts"
+    "docs/IMPLEMENTATION-STATUS.md"
   ],
   "engines": {
     "node": ">=22.19.0"
@@ -55,13 +52,19 @@
     }
   },
   "scripts": {
-    "test": "node scripts/run-tests.mjs && vitest run --config vitest.config.ts --pool=threads --maxWorkers=1",
+    "test": "node scripts/run-tests.mjs && vitest run --config vitest.config.ts",
+    "test:node": "node scripts/run-tests.mjs",
+    "test:client": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsdown --config tsdown.config.ts",
-    "typecheck": "tsc -b tsconfig.json --pretty false",
-    "pack:release": "node -e \"require('node:fs').mkdirSync('artifacts',{recursive:true})\" && npm pack --cache .npm-cache --pack-destination artifacts",
+    "verify:host": "node scripts/verify-built-host.mjs",
+    "verify:client": "node scripts/verify-built-client.mjs",
+    "verify:package": "node scripts/verify-package.mjs",
+    "pack:release": "node -e \"require('node:fs').mkdirSync('artifacts',{recursive:true})\" && npm pack --pack-destination artifacts",
+    "verify:archive": "node scripts/verify-archive.mjs",
+    "verify:release": "npm run test && npm run typecheck && npm run build && npm run verify:host && npm run verify:client && npm run verify:package && npm run pack:release && npm run verify:archive",
     "verify:public-benchmarks": "node --experimental-strip-types scripts/verify-public-benchmarks.mjs",
-    "verify:memory-scale": "node scripts/verify-memory-scale.mjs 10000",
-    "verify:release": "npm run test && npm run typecheck && npm run build && node scripts/verify-built-host.mjs && node scripts/verify-built-client.mjs && node scripts/verify-package.mjs && npm run pack:release && node scripts/verify-archive.mjs"
+    "verify:memory-scale": "node scripts/verify-memory-scale.mjs 10000"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
@@ -76,19 +79,30 @@
     "sqlite-vec": "^0.1.7"
   },
   "devDependencies": {
-    "tsdown": "^0.22.2",
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.10",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.6",
+    "@deepseek-ai/dsh-llm": "^0.2.1-rc.5",
+    "@deepseek-ai/dsh-session": "^0.2.1-rc.5",
+    "@deepseek-ai/dsh-settings": "^0.2.1-rc.5",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.20.0",
+    "@types/react": "^18.3.14",
+    "@types/react-dom": "^18.3.1",
+    "cytoscape": "^3.33.1",
+    "cytoscape-dagre": "^2.5.0",
+    "cytoscape-fcose": "^2.2.0",
+    "happy-dom": "^15.11.7",
     "lightningcss": "^1.33.0",
-    "three": "0.186.1",
-    "typescript": "^5.9.3",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "three": "0.186.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9",
+    "officeparser": "8.0.0",
+    "@melandlabs/opencontext": "^0.5.1"
   },
-  "directories": {
-    "doc": "docs",
-    "lib": "lib",
-    "test": "tests"
-  },
-  "keywords": [],
   "author": "agentos-context contributors",
   "peerDependenciesMeta": {
     "officeparser": {

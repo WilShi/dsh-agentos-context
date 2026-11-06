@@ -1,4 +1,8 @@
 /**
+ * TEST-ONLY chunk server: not wired into the shipped entry (the official
+ * /plugins/<id>/client.js route serves the client bundle). Kept for the legacy
+ * chunk loader used by tests and the prototype page (HOST-REVIEW L3).
+ *
  * Lazy chunk route: /opencontext-api/bundle/<name>.js（照 better-sidebar
  * src/bundle-route.ts）。官方 /plugins/<id>/client.js 路由服务不了任意文件名，
  * 插件自己服务拆分 chunk（lib/client-<name>.js）；client 在首次打开图谱视图时

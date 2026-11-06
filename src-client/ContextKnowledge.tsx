@@ -207,15 +207,24 @@ export function ContextKnowledge({
       setUploadProgress(null)
     }
   }
+  // M7: uploadFiles already reports progress/failures itself; this helper keeps
+  // the fire-and-forget call sites from ever producing an unhandled rejection
+  // (AbortError included, e.g. the view unmounts mid-upload).
+  const startUpload = (files: readonly File[]) => {
+    void uploadFiles([...files]).catch(error => {
+      if ((error as Error | undefined)?.name !== 'AbortError')
+        setError(plainError(error))
+    })
+  }
   const upload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.currentTarget.files ?? [])
+    const files = Array.from(event.currentTarget.files ?? []) as File[]
     event.currentTarget.value = ''
-    void uploadFiles(files)
+    startUpload(files)
   }
   const drop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setDragging(false)
-    if (!busy) void uploadFiles(Array.from(event.dataTransfer.files ?? []))
+    if (!busy) startUpload(Array.from(event.dataTransfer.files ?? []) as File[])
   }
   const remove = async () => {
     if (!pendingDelete || busy) return

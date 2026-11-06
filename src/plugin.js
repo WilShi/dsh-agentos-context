@@ -47,6 +47,21 @@ import { registerSummaryTools } from "./tools-summary.js";
 import { registerTools } from "./tools.js";
 import { restoreNativeReadableStream } from "./web-runtime-compat.js";
 import { dirname } from "node:path";
+/** Read-only members a degraded store keeps so the UI can still boot. */
+const DEGRADED_STORE_METHODS = ["saveMemory", "importLegacy", "getMemory", "listMemories", "searchMemories", "reviseMemory", "transitionMemory", "reinforceMemory", "retireMemory", "versions", "createEntity", "listEntities", "getEntity", "mergeEntities", "validateRelation", "createRelation", "reviewRelation", "listRelations", "listReviews", "changes", "recordUsage", "updateUsage", "setUsagePolicy", "getSchema", "graph"];
+/**
+ * Keep the plugin loaded when the sidecar cannot open (missing feature flag,
+ * corrupt file, disk full, locked database). Tools and RPC stay registered and
+ * answer STORE_UNAVAILABLE while legacy reads keep working (HOST-REVIEW H3).
+ */
+export function createUnavailableStore(reason) {
+    const unavailable = () => { throw Object.assign(new Error("memory store unavailable"), { code: "STORE_UNAVAILABLE", detail: reason }); };
+    const store = { driver: "unavailable", listScopes: () => [], expireMemories: () => [], listUsage: () => [], findUsageByMessageId: () => undefined, getUsagePolicy: () => ({ revision: 0, paused: false, excludedIds: [], preferredIds: [] }), close: () => { } };
+    for (const method of DEGRADED_STORE_METHODS) store[method] = unavailable;
+    return store;
+}
+/** Vectors are a cache; a bounded scan keeps interactive recall predictable. */
+const VECTOR_MAX_ROWS = 20000;
 export const name = "dsh-agentos-context";
 export const inject = [
     "tools",
@@ -83,7 +98,14 @@ export async function apply(ctx, config) {
     });
     ctx.on("loader/volatile-update", () => {
         const openContextDb = resolved.contextDbPath;
-        Object.assign(resolved, resolveConfig(config), restartOnly, { contextDbPath: openContextDb });
+        try {
+            // Patch (Settings) values now win over environment defaults, so a
+            // live edit is what the next operation actually uses (HOST-REVIEW M4).
+            Object.assign(resolved, resolveConfig(config), restartOnly, { contextDbPath: openContextDb });
+        }
+        catch (error) {
+            ctx.logger.warn?.("[agentOS context] volatile config update rejected; keeping the previous values (" + (error?.code ?? "INVALID_INPUT") + ")");
+        }
     });
     // model gateway embedding: resolves the key per call through the
     // credentials seam, so a saved/rotated key reaches the next embed without
@@ -91,15 +113,27 @@ export async function apply(ctx, config) {
     // backend never lets an embed error block a write).
     const embeddingProvider = createGatewayEmbeddingProvider(ctx, resolved);
     const legacyBackend = createBackend(resolved, { embeddingProvider, credentials: ctx.credentials });
-    const contextDbPath = prepareContextDbPath(resolved, process.env, getOpenContextDir());
-    resolved.contextDbPath = contextDbPath;
-    const contextStore = createContextStore({ dbPath: contextDbPath });
+    let contextStore;
+    let storeDegraded = false;
+    try {
+        const contextDbPath = prepareContextDbPath(resolved, process.env, getOpenContextDir());
+        resolved.contextDbPath = contextDbPath;
+        contextStore = createContextStore({ dbPath: contextDbPath });
+    }
+    catch (error) {
+        storeDegraded = true;
+        ctx.logger.warn?.("[agentOS context] memory sidecar unavailable (" + (error?.code ?? "STORE_UNAVAILABLE") + "); memory, recall and capture stay disabled until the store opens. Legacy OpenContext reads remain available.");
+        contextStore = createUnavailableStore(error?.code ?? "STORE_UNAVAILABLE");
+    }
     let vectorIndex;
     let contextService;
     let backend;
     let usage;
     try {
-        try { vectorIndex = createContextVectorIndex({ dbPath: contextDbPath + ".vectors", provider: embeddingProvider }); }
+        try {
+            if (storeDegraded || !resolved.contextDbPath) throw Object.assign(new Error("sidecar unavailable"), { code: "STORE_UNAVAILABLE" });
+            vectorIndex = createContextVectorIndex({ dbPath: resolved.contextDbPath + ".vectors", provider: embeddingProvider, maxRows: VECTOR_MAX_ROWS });
+        }
         catch (error) { ctx.logger.warn("[agentOS context] semantic sidecar unavailable; lexical and graph search remain active (" + (error?.code ?? "VECTOR_UNAVAILABLE") + ")"); }
         contextService = createContextService({ store: contextStore, legacy: legacyBackend, config: resolved, sessions: ctx.sessions, vectorIndex, defaultScope: () => resolved.scopeId || "local:default" });
         backend = createBackendBridge({ service: contextService, legacy: legacyBackend, defaultScope: () => resolved.scopeId || "local:default", config: resolved });
@@ -114,7 +148,7 @@ export async function apply(ctx, config) {
     // 与 embedding 同样按次 resolve 密钥，轮换即时生效。
     const distiller = createDistiller(ctx, resolved);
     // Authenticated Client Connection routes; no raw public webServer memory or credential endpoints.
-    const rpcHandler = createContextRpcHandler({ service: contextService, credentials: ctx.credentials, config: resolved, distiller });
+    const rpcHandler = createContextRpcHandler({ service: contextService, credentials: ctx.credentials, config: resolved, distiller, sessions: ctx.sessions });
     ctx.inject(["connection"], (inner) => {
         for (const endpoint of CONTEXT_RPC_ENDPOINTS) inner.connection.fetch.register(createContextRpcRoute(endpoint, async (method, payload, signal) => {
             try { return { ok: true, value: await rpcHandler(method, payload, signal) }; }

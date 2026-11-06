@@ -23,8 +23,35 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { getOpenContextPath } from "@melandlabs/env-config";
-import Database from "better-sqlite3";
-import * as sqliteVec from "sqlite-vec";
+import { createRequire } from "node:module";
+// Native modules stay lazy: importing this module must never fail because a
+// prebuilt binary is missing or ABI-mismatched. Only an actual knowledge
+// operation pays for them (HOST-REVIEW H3).
+const require = createRequire(import.meta.url);
+let betterSqlite3 = null;
+let sqliteVecModule = null;
+export function loadBetterSqlite3() {
+    if (betterSqlite3 === null) {
+        try {
+            betterSqlite3 = require("better-sqlite3");
+        }
+        catch (error) {
+            throw Object.assign(new Error("knowledge storage native driver is unavailable"), { code: "STORE_UNAVAILABLE", cause: error });
+        }
+    }
+    return betterSqlite3;
+}
+export function loadSqliteVec() {
+    if (sqliteVecModule === null) {
+        try {
+            sqliteVecModule = require("sqlite-vec");
+        }
+        catch (error) {
+            throw Object.assign(new Error("sqlite-vec extension is unavailable"), { code: "STORE_UNAVAILABLE", cause: error });
+        }
+    }
+    return sqliteVecModule;
+}
 import { cleanMetadata } from "./context/service.js";
 const KNOWLEDGE_DB_NAME = "dsh-knowledge.db";
 const DEFAULT_VEC_DIMENSION = 384; // Xenova/all-MiniLM-L6-v2
@@ -35,7 +62,7 @@ const KNOWLEDGE_SCHEMA_VERSION = 3;
  * Native extensions cannot be loaded from the archive, so retry the exact
  * corresponding app.asar.unpacked path when that file exists.
  */
-export function loadSqliteVecExtension(db, vec = sqliteVec) {
+export function loadSqliteVecExtension(db, vec = loadSqliteVec()) {
     try {
         vec.load(db);
         return;
@@ -430,6 +457,7 @@ export class LibKnowledgeStore {
         if (this.db)
             return;
         ensureDirSync(dirname(this.dbPath));
+        const Database = loadBetterSqlite3();
         const db = new Database(this.dbPath);
         try {
             const appId = Number(db.pragma("application_id", { simple: true }) ?? 0);

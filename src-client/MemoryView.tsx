@@ -1,7 +1,7 @@
 /** Conversation-native memory overview with a readable list and graph. */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Tag } from './ui-primitives.tsx'
-import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ContextApi } from './context-api.ts'
 import type { ContextMemory } from './context-types.ts'
 import { ContextGraph } from './ContextGraph.tsx'
@@ -22,7 +22,17 @@ import css from './MemoryView.module.css'
 export { groupByDay } from './memory-grouping.ts'
 export type { DayGroup } from './memory-grouping.ts'
 
-export type MemoryViewFace = ConvViewProps & { contextApi: ContextApi }
+/**
+ * Structural subset of `ConvViewProps` from
+ * `@deepseek-ai/dsh-client-ui-conversation/client`. The host package exists at
+ * runtime, but this source tree does not install its declarations; only the two
+ * members this view reads are declared here.
+ */
+interface ConversationViewProps {
+  readonly sessionId: SessionId
+  openView(view: string, id?: string): void
+}
+export type MemoryViewFace = ConversationViewProps & { contextApi: ContextApi }
 type OverviewMode = 'list' | 'graph'
 
 function captureLabel(memory: ContextMemory): string {
@@ -196,26 +206,50 @@ function MemoryDetail({
  * The composer has a stable host data attribute. The width handle currently
  * has a build-hashed class, so it is identified conservatively by geometry:
  * only a tall, narrow col-resize element touching this surface is marked.
+ *
+ * H4: the original implementation re-ran `document.querySelectorAll('body *')`
+ * plus getComputedStyle/getBoundingClientRect for every body mutation — i.e.
+ * once per streaming frame — which caused layout thrash in long conversations.
+ * This version never observes mutations. It scans a few times after mount,
+ * when the surface or one of its ancestors resizes (ResizeObserver), and on
+ * window resize, and it checks geometry before computed style so the number of
+ * forced style reads stays proportional to real size changes.
  */
+const LAYOUT_HANDLE_HINT = [
+  '[role="separator"]',
+  '[class*="resize" i]',
+  '[class*="handle" i]',
+  '[class*="gutter" i]',
+  '[class*="splitter" i]',
+].join(',')
+
+/** Elements worth probing: the host's own handle classes when they survived the
+ *  build, otherwise a bounded walk of the document (the fallback keeps working
+ *  for hashed class names). */
+function layoutHandleCandidates(): HTMLElement[] {
+  const hinted = [...document.querySelectorAll<HTMLElement>(LAYOUT_HANDLE_HINT)]
+  if (hinted.length > 0) return hinted
+  const all = document.querySelectorAll<HTMLElement>('body *')
+  return all.length > 4000 ? [...all].slice(0, 4000) : [...all]
+}
+
 function useMemorySurfaceChrome(
-  surfaceRef: React.RefObject<HTMLElement>,
+  surfaceRef: { readonly current: HTMLElement | null },
 ): void {
   useEffect(() => {
     const root = document.documentElement
     root.dataset.agentosMemoryActive = 'true'
     const marked = new Set<HTMLElement>()
     let frame = 0
+    let debounce = 0
     const scan = () => {
+      if (document.visibilityState === 'hidden') return
       const surface = surfaceRef.current
       if (!surface) return
       const area = surface.getBoundingClientRect()
-      for (const candidate of document.querySelectorAll<HTMLElement>(
-        'body *',
-      )) {
+      if (area.width <= 0 || area.height <= 0) return
+      for (const candidate of layoutHandleCandidates()) {
         if (candidate === surface || surface.contains(candidate)) continue
-        const style = getComputedStyle(candidate)
-        if (style.cursor !== 'col-resize' && style.cursor !== 'ew-resize')
-          continue
         const rect = candidate.getBoundingClientRect()
         if (rect.width <= 0 || rect.width > 48 || rect.height < 80) continue
         const overlapsVertically =
@@ -223,29 +257,44 @@ function useMemorySurfaceChrome(
         const overlapsHorizontally =
           rect.right >= area.left - 16 && rect.left <= area.right + 16
         if (!overlapsVertically || !overlapsHorizontally) continue
+        const cursor = getComputedStyle(candidate).cursor
+        if (cursor !== 'col-resize' && cursor !== 'ew-resize') continue
         candidate.dataset.agentosMemoryLayoutHandle = 'true'
         marked.add(candidate)
       }
     }
+    // Debounce: a resize drag fires many observer callbacks; one scan per settle
+    // is enough and keeps the frame budget free.
     const scheduleScan = () => {
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(scan)
+      window.clearTimeout(debounce)
+      debounce = window.setTimeout(() => {
+        frame = requestAnimationFrame(scan)
+      }, 120)
     }
     scan()
     const retries = [50, 250, 750, 1500, 3000].map(delay =>
       window.setTimeout(scan, delay),
     )
-    const observer = new MutationObserver(scheduleScan)
-    observer.observe(document.body, { childList: true, subtree: true })
+    // Observe the surface and the layout containers that decide where the
+    // host's handle sits, instead of every mutation in the document.
+    const observed: Element[] = []
+    for (
+      let node: Element | null = surfaceRef.current;
+      node !== null && node !== document.body;
+      node = node.parentElement
+    ) {
+      observed.push(node)
+    }
     const resize =
       typeof ResizeObserver === 'function'
         ? new ResizeObserver(scheduleScan)
         : null
-    if (surfaceRef.current) resize?.observe(surfaceRef.current)
+    for (const node of observed) resize?.observe(node)
     window.addEventListener('resize', scheduleScan)
     return () => {
       cancelAnimationFrame(frame)
-      observer.disconnect()
+      window.clearTimeout(debounce)
       resize?.disconnect()
       window.removeEventListener('resize', scheduleScan)
       for (const timer of retries) window.clearTimeout(timer)

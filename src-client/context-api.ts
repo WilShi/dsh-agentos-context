@@ -1,4 +1,29 @@
-import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
+/**
+ * Structural mirror of `@deepseek-ai/dsh-client-connection/client`.
+ *
+ * The host provides that package at runtime; this source tree does not install
+ * its type declarations, and importing the module here made the whole client
+ * untypable. Only the single method this API uses is declared, so the contract
+ * stays checked at the call sites below.
+ */
+type ConnectionRpcResult =
+  | { readonly ok: true; readonly value: unknown }
+  | {
+      readonly ok: false
+      readonly error: {
+        readonly code: string
+        readonly message: string
+        readonly details?: unknown
+      }
+    }
+interface ClientConnectionRpc {
+  call(
+    base: string,
+    method: string,
+    payload: unknown,
+    signal?: AbortSignal,
+  ): Promise<ConnectionRpcResult>
+}
 import type {
   ContextBootstrap,
   ContextMemory,
@@ -194,6 +219,12 @@ export interface ContextApi {
   refresh(): void
   dispose(): void
 }
+/** M4: bounded RPC waits, so a wedged host cannot leave the UI spinning. */
+const READ_TIMEOUT_MS = 15_000
+const WRITE_TIMEOUT_MS = 30_000
+/** Document parsing/indexing is a long host job (knowledgeUploadTimeoutMs default 10 min). */
+const KNOWLEDGE_JOB_TIMEOUT_MS = 600_000
+
 export function createContextApi(rpc: ClientConnectionRpc): ContextApi {
   let revision = 0,
     disposed = false
@@ -212,10 +243,19 @@ export function createContextApi(rpc: ClientConnectionRpc): ContextApi {
     payload: object,
     signal?: AbortSignal,
     write = false,
+    timeoutMs = write ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS,
   ): Promise<T> {
     if (disposed) throw new ContextApiError('DISPOSED', '记忆界面已关闭')
-    const controller = new AbortController(),
-      abort = () => controller.abort(signal?.reason)
+    const controller = new AbortController()
+    const limit = Math.max(1_000, timeoutMs)
+    let timedOut = false
+    // M4: a stalled Connection RPC used to hang the pane forever. Time out with
+    // a distinguishable code; the caller's own abort still wins when it fires.
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort(new DOMException('Timed out', 'TimeoutError'))
+    }, limit)
+    const abort = () => controller.abort(signal?.reason)
     if (signal?.aborted) abort()
     else signal?.addEventListener('abort', abort, { once: true })
     active.add(controller)
@@ -239,12 +279,18 @@ export function createContextApi(rpc: ClientConnectionRpc): ContextApi {
       if (write) refresh()
       return result.value as T
     } catch (error) {
+      if (timedOut)
+        throw new ContextApiError(
+          'TIMEOUT',
+          `请求超过 ${Math.round(limit / 1_000)} 秒未响应，已取消；请确认 DSH 主机状态后重试`,
+        )
       if (controller.signal.aborted)
         throw (
           controller.signal.reason ?? new DOMException('Aborted', 'AbortError')
         )
       throw error
     } finally {
+      clearTimeout(timer)
       signal?.removeEventListener('abort', abort)
       active.delete(controller)
     }
@@ -314,6 +360,7 @@ export function createContextApi(rpc: ClientConnectionRpc): ContextApi {
           input,
           signal,
           true,
+          KNOWLEDGE_JOB_TIMEOUT_MS,
         )
       ).item,
     deleteDocument: async (scopeId, id, signal) =>
@@ -325,7 +372,7 @@ export function createContextApi(rpc: ClientConnectionRpc): ContextApi {
           true,
         )
       ).deleted,
-    reindexDocument: (scopeId,id,signal) => call('document/reindex',{ scopeId,id },signal,true),
+    reindexDocument: (scopeId,id,signal) => call('document/reindex',{ scopeId,id },signal,true,KNOWLEDGE_JOB_TIMEOUT_MS),
     deleteDocuments: (scopeId,ids,signal) => call('documents/delete',{ scopeId,ids },signal,true),
     saveMemory: async (input, signal) =>
       (await call<{ item: ContextMemory }>('memory/save', input, signal, true))

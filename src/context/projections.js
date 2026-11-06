@@ -79,6 +79,10 @@ export function projectGraph(db, { scopeId, rootId, depth = 2, includePending = 
   const nodeCache = new Map();
   const recordCache = new Map();
   let truncated = false;
+  // A caller-requested depth boundary is not data truncation; report it
+  // separately so the UI can distinguish "you asked for N hops" from
+  // "the graph was cut by a limit" (HOST-REVIEW M1).
+  let depthLimited = false;
   const cap = LIMITS.graphEdges;
   const recordOptions = { knownAt, validAt: at, limit: cap + 1 };
   const relationStatus = includePending ? "r.status IN ('confirmed','pending')" : "r.status='confirmed'";
@@ -142,9 +146,11 @@ export function projectGraph(db, { scopeId, rootId, depth = 2, includePending = 
   }
   if (rootId !== undefined) select(loadNode(rootId), 0);
   else {
-    const entities = latestRecords(db, 'entity', scopeId, { knownAt, limit: limit + 1, conditions: 'NOT EXISTS(SELECT 1 FROM ctx_entity_redirects d WHERE d.scope_id=r.scope_id AND d.from_id=r.id AND d.recorded_at<=?)', params: [knownAt], order: 'r.id' });
-    const memories = latestRecords(db, 'memory', scopeId, { ...recordOptions, limit: limit + 1, conditions: "r.lifecycle<>'retired'", order: 'r.id' });
-    const seeds = [...entities, ...memories];
+    const entities = latestRecords(db, 'entity', scopeId, { knownAt, limit: limit + 1, conditions: 'NOT EXISTS(SELECT 1 FROM ctx_entity_redirects d WHERE d.scope_id=r.scope_id AND d.from_id=r.id AND d.recorded_at<=?)', params: [knownAt], order: 'r.recorded_at DESC, r.id' });
+    const memories = latestRecords(db, 'memory', scopeId, { ...recordOptions, limit: limit + 1, conditions: "r.lifecycle<>'retired'", order: 'r.recorded_at DESC, r.id' });
+    // Newest-first across both kinds: a limited view must never prefer an
+    // older id over a fresh memory (HOST-REVIEW M2).
+    const seeds = [...entities, ...memories].sort((left, right) => (right.recordedAt ?? 0) - (left.recordedAt ?? 0) || String(left.id).localeCompare(String(right.id)));
     if (seeds.length > limit) truncated = true;
     for (const r of seeds.slice(0, limit)) select(loadNode(r.id), 0);
   }
@@ -159,10 +165,10 @@ export function projectGraph(db, { scopeId, rootId, depth = 2, includePending = 
       const other = loadNode(otherId);
       if (!other) continue;
       if (distance < depth) select(other, distance + 1);
-      else if (!selected.has(other.id)) truncated = true;
+      else if (!selected.has(other.id)) depthLimited = true;
     }
   }
   const nodes = [...selected.values()];
   const edges = [...candidates.values()].filter(e => selected.has(e.source) && selected.has(e.target));
-  return { nodes, edges, stats: { nodeCount: nodes.length, edgeCount: edges.length, truncated } };
+  return { nodes, edges, stats: { nodeCount: nodes.length, edgeCount: edges.length, truncated, depthLimited } };
 }

@@ -6,7 +6,6 @@ import { plainError, useLoad, useMutationGuard } from './context-ui-helpers.tsx'
 import styles from './Context.module.css'
 
 export function ContextReview({ api, scopeId }: { api: ContextApi; scopeId: string }) {
-  const runMutation = useMutationGuard()
   const state = useLoad(api, 'reviews:' + scopeId, signal => api.reviews(scopeId, signal))
   const entityState = useLoad(api, 'review-entities:' + scopeId, signal => api.entities(scopeId, undefined, signal))
   const schemaState = useLoad(api, 'review-schema', signal => api.schema(signal))
@@ -14,6 +13,12 @@ export function ContextReview({ api, scopeId }: { api: ContextApi; scopeId: stri
     [reason, setReason] = useState(''),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('')
+  // M5: a decision is bound to one scope AND one relation; changing either
+  // aborts the in-flight review so a stale decision can never be applied to the
+  // newly selected item.
+  const runMutation = useMutationGuard(
+    scopeId + '\u0000' + (selected?.id ?? '') + '\u0000' + (selected?.revision ?? ''),
+  )
   const typeLabels = useMemo(() => new Map((schemaState.data?.types ?? []).map(type => [type.id, type.label])), [schemaState.data])
   const names = useMemo(() => new Map((entityState.data ?? []).map(entity => [entity.id, `${entity.name} · ${typeLabels.get(entity.type) ?? entity.type}`])), [entityState.data, typeLabels])
   const predicates = useMemo(

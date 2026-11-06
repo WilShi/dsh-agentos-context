@@ -40,10 +40,14 @@ function parserUnavailableError(cause) {
   return Object.assign(fail('DOCUMENT_PARSER_UNAVAILABLE', OFFICE_PARSER_MISSING_MESSAGE), { cause })
 }
 
+let domShimRestore = null
 function ensureOfficeParserEnvironment() {
+  if (domShimRestore !== null) return
+  const addedShims = []
   // PDF.js evaluates DOMMatrix during module initialization. The Electron host
   // runs without DOM globals, so provide only the affine operations needed for
-  // text extraction. Never replace a native implementation when one exists.
+  // text extraction. Never replace a native implementation when one exists,
+  // and always remove the shim again after parsing (HOST-REVIEW L5).
   if (typeof globalThis.DOMMatrix === 'undefined') {
     globalThis.DOMMatrix = class DOMMatrix {
       constructor(init) {
@@ -82,13 +86,21 @@ function ensureOfficeParserEnvironment() {
         return { x: x * this.a + y * this.c + this.e, y: x * this.b + y * this.d + this.f }
       }
     }
+    addedShims.push('DOMMatrix')
   }
   if (typeof globalThis.ImageData === 'undefined') {
     globalThis.ImageData = class ImageData {
       constructor(data, width, height) { this.data = data; this.width = width; this.height = height }
     }
+    addedShims.push('ImageData')
+  }
+  domShimRestore = () => {
+    for (const key of addedShims) delete globalThis[key]
+    domShimRestore = null
   }
 }
+/** Remove the parser-only globals again (safe no-op when nothing was installed). */
+export function restoreOfficeParserEnvironment() { if (domShimRestore !== null) domShimRestore() }
 
 async function officeParser() {
   ensureOfficeParserEnvironment()
@@ -132,7 +144,9 @@ function decodeBase64(value) {
     throw fail('LIMIT_EXCEEDED', '文档内容无效或超过 25 MB 限制')
   }
   const bytes = Buffer.from(value, 'base64')
-  if (bytes.length === 0 || bytes.length > MAX_BINARY_DOCUMENT_BYTES || bytes.toString('base64') !== value) {
+  // The regex above already rejects non-canonical alphabet/padding; a full
+  // toString('base64') round-trip used to duplicate up to 33 MB per upload.
+  if (bytes.length === 0 || bytes.length > MAX_BINARY_DOCUMENT_BYTES) {
     throw fail('LIMIT_EXCEEDED', '文档内容无效或超过 25 MB 限制')
   }
   return bytes
@@ -218,5 +232,7 @@ export async function prepareKnowledgeDocument(input, options = {}) {
     if (error?.code === 'DOCUMENT_PARSER_UNAVAILABLE') throw error
     if (error?.code === 'LIMIT_EXCEEDED' || error?.code === 'DOCUMENT_PARSE_FAILED') throw error
     throw fail('DOCUMENT_PARSE_FAILED', '文档无法解析，可能已损坏、加密或格式与扩展名不一致')
+  } finally {
+    restoreOfficeParserEnvironment()
   }
 }

@@ -1,4 +1,9 @@
 /**
+ * TEST-ONLY: not imported by the shipped host entry; scripts/verify-package.mjs
+ * asserts the built artifact contains no such route. If it is ever wired into
+ * production it MUST add the same-origin/CSRF checks used by
+ * context/routes.js (HOST-REVIEW L3).
+ *
  * /opencontext-api data routes — UI 数据通路（M3 列表/M4 图谱共用）+ M1 E2E 驱动面。
  *
  * Prefix router on the loopback webServer（webServer.register kind:'prefix'）。

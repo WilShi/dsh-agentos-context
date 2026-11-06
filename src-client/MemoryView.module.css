@@ -562,3 +562,12 @@
   font-size: 12px;
   color: var(--dsw-alias-status-danger-label, #b42318);
 }
+
+/* a11y: honour the OS "reduce motion" preference for this surface's transitions. */
+@media (prefers-reduced-motion: reduce) {
+  .overview,
+  .memoryCard,
+  .item {
+    transition: none;
+  }
+}

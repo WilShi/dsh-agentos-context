@@ -63,8 +63,8 @@ export function createContextStore(options) {
     db.run("UPDATE ctx_meta SET value=? WHERE key='clock'", String(result));
     return result;
   }
-  function audit(scopeId, action, targetId, revision, reason, at) {
-    const record = { id: uid('change'), action, targetId, reason, at, revision };
+  function audit(scopeId, action, targetId, revision, reason, at, detail) {
+    const record = { id: uid('change'), action, targetId, reason, at, revision, ...(detail && typeof detail === 'object' ? detail : {}) };
     db.run('INSERT INTO ctx_changes(id,scope_id,recorded_at,record_json) VALUES (?,?,?,?)', record.id, scopeId, at, JSON.stringify(record));
   }
   function insertSource(scopeId, input, at) {
@@ -130,14 +130,38 @@ export function createContextStore(options) {
     const event = db.get('SELECT * FROM ctx_usage_events WHERE usage_id=? ORDER BY revision DESC LIMIT 1', usage.id);
     return { ...usage, phase: event.phase, at: event.at, ...(event.event_seq === null ? {} : { eventSeq: event.event_seq }) };
   }
+  // Client event times live in their own domain: kept in memory for the live
+  // path and mirrored into the insert-only audit log so a restart can still
+  // compare "same-domain" timestamps. Never mixed with stamp().
+  const usageClientAt = new Map();
+  function previousUsageClientAt(usageId, record, scopeId) {
+    const cached = usageClientAt.get(usageId);
+    if (cached !== undefined) return cached;
+    if (record && Number.isFinite(record.clientAt)) {
+      usageClientAt.set(usageId, record.clientAt);
+      return record.clientAt;
+    }
+    try {
+      const change = decode(db.get("SELECT record_json FROM ctx_changes WHERE scope_id=? AND json_extract(record_json,'$.targetId')=? AND json_extract(record_json,'$.clientAt') IS NOT NULL ORDER BY seq DESC LIMIT 1", scopeId, usageId));
+      if (change && Number.isFinite(change.clientAt)) {
+        usageClientAt.set(usageId, change.clientAt);
+        return change.clientAt;
+      }
+    }
+    catch { /* JSON1 unavailable: the in-memory map still covers this process */ }
+    return undefined;
+  }
   function policy(sessionId) {
     return decode(db.get('SELECT record_json FROM ctx_policy_revisions WHERE session_id=? ORDER BY revision DESC LIMIT 1', sessionId)) ?? { revision: 0, paused: false, excludedIds: [], preferredIds: [] };
   }
   function knownMemory(scopeId, id) {
     const record = revisionAt(db, 'memory', scopeId, id);
     if (record) return record;
-    if (db.get('SELECT 1 FROM ctx_objects WHERE scope_id=? AND id=?', scopeId, id)) fail('INVALID_REFERENCE');
-    if (db.get('SELECT 1 FROM ctx_objects WHERE id=? LIMIT 1', id)) fail('NOT_FOUND');
+    // Same-scope non-memory ids and ids known only in another scope answer
+    // identically, so probing cannot reveal foreign-scope membership
+    // (HOST-REVIEW M11). Unknown ids stay undefined and the caller maps them
+    // to the same INVALID_REFERENCE.
+    if (db.get('SELECT 1 FROM ctx_objects WHERE id=? LIMIT 1', id)) fail('INVALID_REFERENCE');
     return undefined;
   }
 
@@ -312,6 +336,7 @@ export function createContextStore(options) {
       const reason = v.text(data.reason, 'reason', 4000);
       const previous = required(revisionAt(db, 'memory', scopeId, id));
       changed(expected, previous.revision);
+      if (previous.lifecycle === 'retired') fail('INVALID_TRANSITION');
       const at = stamp();
       const m = { ...previous, lifecycle: 'retired', recordedAt: at, revision: previous.revision + 1 };
       insertMemory(m, mentions(previous));
@@ -406,6 +431,11 @@ export function createContextStore(options) {
       const reason = v.text(data.reason, 'reason', 4000);
       const previous = required(revisionAt(db, 'relation', scopeId, id));
       changed(expected, previous.revision);
+      // Reviews are not a toggle: a rejected relation is final (create a new
+      // relation with new evidence), a confirmed relation may only be
+      // retracted. This keeps the audit trail monotone (HOST-REVIEW M9).
+      if (previous.status === 'rejected') fail('INVALID_TRANSITION');
+      if (previous.status === 'confirmed' && decision === 'confirm') fail('INVALID_TRANSITION');
       if (decision === 'confirm') {
         if (!previous.sourceId || !previous.quote) fail('EVIDENCE_REQUIRED');
         const source = required(sourceAt(db, scopeId, previous.sourceId));
@@ -473,7 +503,10 @@ export function createContextStore(options) {
       if (data.messageId !== undefined) normalized.messageId = v.identifier(data.messageId, 'messageId');
       for (const key of ['turn', 'step']) if (data[key] !== undefined) normalized[key] = typeof data[key] === 'string' ? v.identifier(data[key], key) : v.integer(data[key], key);
       if (data.reason !== undefined) normalized.reason = v.text(data.reason, 'reason', 4000);
-      if (data.at !== undefined) normalized.at = v.timestamp(data.at);
+      // A caller-supplied time is an event time (Date.now domain). It is kept
+      // apart from the sidecar's monotonic stamp so the two are never compared
+      // (HOST usage-clock fix).
+      if (data.at !== undefined) normalized.clientAt = v.timestamp(data.at);
       const fingerprint = hash(normalized);
       const replay = db.get('SELECT * FROM ctx_usage_records WHERE id=?', id);
       if (replay) {
@@ -488,11 +521,14 @@ export function createContextStore(options) {
         if (!m && !(trustedLegacy && item.legacy === true)) fail('INVALID_REFERENCE');
       }
       const at = stamp();
-      const result = { ...normalized, at: normalized.at ?? at };
+      // record.at / event.at stay in the internal monotonic domain; the client
+      // event time (when the caller supplied one) is preserved as clientAt.
+      const result = { ...normalized, at };
       ensureScope(scopeId);
       db.run('INSERT INTO ctx_usage_records(id,session_id,scope_id,payload_hash,recorded_at,record_json) VALUES (?,?,?,?,?,?)', id, sessionId, scopeId, fingerprint, at, JSON.stringify(result));
-      db.run('INSERT INTO ctx_usage_events(usage_id,revision,phase,event_seq,at) VALUES (?,1,?,NULL,?)', id, 'planned', result.at);
-      audit(scopeId, 'usage.planned', id, 1, normalized.reason ?? 'Planned context, not committed or injected.', at);
+      db.run('INSERT INTO ctx_usage_events(usage_id,revision,phase,event_seq,at) VALUES (?,1,?,NULL,?)', id, 'planned', at);
+      audit(scopeId, 'usage.planned', id, 1, normalized.reason ?? 'Planned context, not committed or injected.', at, normalized.clientAt === undefined ? undefined : { clientAt: normalized.clientAt });
+      if (normalized.clientAt !== undefined) usageClientAt.set(id, normalized.clientAt);
       return result;
     },
     findUsageByMessageId(input) {
@@ -511,14 +547,19 @@ export function createContextStore(options) {
       const requestedAt = data.at === undefined ? undefined : v.timestamp(data.at);
       const row = required(db.get('SELECT * FROM ctx_usage_records WHERE id=?', id));
       const previous = db.get('SELECT * FROM ctx_usage_events WHERE usage_id=? ORDER BY revision DESC LIMIT 1', id);
-      if (phase === previous.phase && (eventSeq === undefined || eventSeq === previous.event_seq) && (requestedAt === undefined || requestedAt === previous.at)) return usageView(row);
+      // Ordering uses two same-domain signals only:
+      //  - eventSeq: the host session event sequence (strictly monotonic per session);
+      //  - client event time: compared exclusively with another client event time.
+      // The sidecar's internal stamp() is never compared with Date.now() values.
+      const previousClientAt = previousUsageClientAt(id, decode(row), row.scope_id);
+      if (phase === previous.phase && (eventSeq === undefined || eventSeq === previous.event_seq) && (requestedAt === undefined || requestedAt === previousClientAt)) return usageView(row);
       const transitions = { planned: ['committed', 'failed'], committed: ['requested', 'failed'], requested: ['failed'], failed: [] };
-      if (!transitions[previous.phase].includes(phase) || (eventSeq !== undefined && previous.event_seq !== null && eventSeq <= previous.event_seq) || (requestedAt !== undefined && requestedAt < previous.at)) fail('INVALID_TRANSITION');
+      if (!transitions[previous.phase].includes(phase) || (eventSeq !== undefined && previous.event_seq !== null && eventSeq <= previous.event_seq) || (requestedAt !== undefined && previousClientAt !== undefined && requestedAt < previousClientAt)) fail('INVALID_TRANSITION');
       const at = stamp();
-      const eventAt = requestedAt ?? Math.max(at, previous.at);
       const revision = previous.revision + 1;
-      db.run('INSERT INTO ctx_usage_events(usage_id,revision,phase,event_seq,at) VALUES (?,?,?,?,?)', id, revision, phase, eventSeq ?? previous.event_seq, eventAt);
-      audit(row.scope_id, 'usage.' + phase, id, revision, 'Observed usage lifecycle event.', at);
+      db.run('INSERT INTO ctx_usage_events(usage_id,revision,phase,event_seq,at) VALUES (?,?,?,?,?)', id, revision, phase, eventSeq ?? previous.event_seq, at);
+      if (requestedAt !== undefined) usageClientAt.set(id, requestedAt);
+      audit(row.scope_id, 'usage.' + phase, id, revision, 'Observed usage lifecycle event.', at, requestedAt === undefined ? undefined : { clientAt: requestedAt });
       return usageView(row);
     },
     listUsage(input) {

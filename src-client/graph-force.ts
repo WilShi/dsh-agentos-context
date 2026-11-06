@@ -97,7 +97,7 @@ function buildSimulation(
   nodes: ForceNodeInput[],
   edges: ForceEdgeInput[],
   radiusOf: (node: ForceNodeInput) => number,
-): SimulationNode[] {
+): SimulationNode[] & { tick: () => void; nodeById: Map<string, SimulationNode> } {
   const simulation = initialPositions(nodes, radiusOf)
   const index = new Map(simulation.map(node => [node.id, node]))
   const links = edges
@@ -201,6 +201,8 @@ function buildSimulation(
 export interface ForceLayoutOptions {
   radiusOf?: (node: ForceNodeInput) => number
   animate?: boolean
+  /** 仅在 2D 节点视图启用；关闭时不做任何模拟（3D/社区聚合视图不需要力导向）。 */
+  enabled?: boolean
 }
 
 export interface ForceLayoutResult {
@@ -217,7 +219,9 @@ export function useForceLayout(
   edges: ForceEdgeInput[],
   options: ForceLayoutOptions = {},
 ): ForceLayoutResult {
-  const animate = options.animate ?? true
+  const enabled = options.enabled ?? true
+  const reduceMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+  const animate = (options.animate ?? true) && !reduceMotion
   const radiusOf = useMemo(() => options.radiusOf ?? (() => 10), [options.radiusOf])
   const signature = useMemo(() => nodes.map(node => node.id).join('|') + '::' + edges.map(edge => edge.source + '>' + edge.target).join('|'), [nodes, edges])
   const simulationRef = useRef<ReturnType<typeof buildSimulation> | null>(null)
@@ -233,6 +237,12 @@ export function useForceLayout(
   const [settled, setSettled] = useState(false)
 
   useEffect(() => {
+    if (!enabled) {
+      simulationRef.current = null
+      setPositions(new Map())
+      setSettled(true)
+      return
+    }
     const simulation = buildSimulation(nodes, edges, radiusOf)
     simulationRef.current = simulation
     const publish = () => {
@@ -266,12 +276,13 @@ export function useForceLayout(
       simulationRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, animate])
+  }, [signature, animate, enabled])
 
   return {
     positions: positions.size > 0 ? positions : initialPositions,
     settled,
     dragTo: (id, point) => {
+      if (!enabled) return
       const simulation = simulationRef.current
       const node = simulation?.nodeById.get(id)
       if (!node) return
@@ -285,10 +296,12 @@ export function useForceLayout(
       setPositions(next)
     },
     release: (id) => {
+      if (!enabled) return
       const node = simulationRef.current?.nodeById.get(id)
       if (node) node.fixed = false
     },
     reheat: () => {
+      if (!enabled || !animate) return
       const simulation = simulationRef.current
       if (!simulation) return
       if (frameRef.current !== null) return

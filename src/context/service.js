@@ -1,5 +1,6 @@
 /** One authority for the new UI, compatibility tools and recall. Legacy reads never migrate data. */
 import {prepareKnowledgeDocument} from '../document-parser.js';
+import {containsSecret} from '../secrets.js';
 import {withGraphCommunities} from './communities.js';
 import {GLOBAL_SCOPE_ID,createEntityScope,resolveContextIdentity,resolveContextScope,scopeKind} from './scope.js';
 const KINDS=new Set(['fact','decision','preference','constraint','outcome','plan','note']);
@@ -15,7 +16,8 @@ const LEGACY_SEARCH_SCAN_LIMIT=5000;
 const LEGACY_APP_SCOPE_BASENAMES=new Set(['dsh desktop']);
 const fail=(code,message)=>Object.assign(new Error(message),{code});
 const throwIfAborted=opts=>{if(opts?.signal?.aborted)throw fail('ABORTED','操作已取消');};
-export function safeScope(value){if(typeof value!=='string'||!value.trim()||value.length>2048||value.includes('\0'))throw fail('INVALID_INPUT','请选择有效的记忆范围');return value.trim();}
+const MAX_SCOPE_ID_LENGTH=256; // keep in sync with validation.js identifier()
+export function safeScope(value){if(typeof value!=='string'||!value.trim()||value.length>MAX_SCOPE_ID_LENGTH||value.includes('\0'))throw fail('INVALID_INPUT','请选择有效的记忆范围');return value.trim();}
 export function cleanMetadata(value,depth=0){
  if(value===undefined||value===null)return {};
  if(depth>8)throw fail('INVALID_INPUT','元数据层级过深');
@@ -125,7 +127,17 @@ function graphSubset(graph,rootId,depth,limit){
 export function createContextService({store,legacy,config={},defaultScope=()=>config.scopeId||'local:'+process.cwd(),sessions,vectorIndex}){
  let legacyWarning=null,legacyScanWarning=null;
  function scope(input){const value=safeScope(input?.scopeId||defaultScope());if(config.scopeId&&value!==config.scopeId)throw fail('NOT_FOUND','没有可访问的记录');return value;}
- function maintain(scopeId){const expired=typeof store?.expireMemories==='function'?store.expireMemories({scopeId,limit:200}):[];for(const row of expired)vectorIndex?.remove?.(scopeId,row.id);return expired;}
+ // Expiry maintenance is a write; throttle it so read paths (list/search/graph)
+ // do not open a write transaction on every call (HOST-REVIEW M10).
+ const MAINTAIN_INTERVAL_MS=60_000,lastMaintained=new Map();
+ function maintain(scopeId,options={}){
+  const now=Date.now(),previous=lastMaintained.get(scopeId)??0;
+  if(options.force!==true&&now-previous<MAINTAIN_INTERVAL_MS)return [];
+  lastMaintained.set(scopeId,now);
+  const expired=typeof store?.expireMemories==='function'?store.expireMemories({scopeId,limit:200}):[];
+  for(const row of expired)vectorIndex?.remove?.(scopeId,row.id);
+  return expired;
+ }
  async function legacyRead(method,input,opts){
   throwIfAborted(opts);
   try{const rows=await legacy?.[method]?.(input,opts);throwIfAborted(opts);legacyWarning=null;return Array.isArray(rows)?rows:[];}
@@ -197,6 +209,9 @@ export function createContextService({store,legacy,config={},defaultScope=()=>co
  function saveMemory(input,origin={actorRole:'unknown',kind:'record'}){
    const scopeId=scope(input);if(typeof input.content!=='string'||!input.content.trim())throw fail('INVALID_INPUT','记忆内容为空');
    const sourceContent=typeof origin.sourceContent==='string'?origin.sourceContent:input.content;
+   // Explicit saves are rejected too: a credential written into the sidecar is
+   // replayed into later prompts through recall. Callers must redact first.
+   if(containsSecret(input.content)||containsSecret(sourceContent))throw fail('SECRET_REJECTED','content');
   const requestedLayer=config.memoryLayeringEnabled===false?'semantic':origin.layer??input.layer??'semantic';
   const defaultImportance={working:.35,episodic:.55,semantic:.7,procedural:.8}[requestedLayer]??.7;
   const defaultExpiry=layerExpiry(requestedLayer);
@@ -209,9 +224,12 @@ export function createContextService({store,legacy,config={},defaultScope=()=>co
   const saved=store.saveMemory({scopeId,content:input.content,kind:KINDS.has(input.kind)?input.kind:'note',...placement,metadata:cleanMetadata(input.metadata??{}),source:{content:sourceContent,kind:origin.kind??'record',actorRole:origin.sourceActorRole??origin.actorRole??'unknown',complete:origin.complete!==false,...(typeof origin.lineageId==='string'?{lineageId:origin.lineageId}:{})},...(input.idempotencyKey?{idempotencyKey:input.idempotencyKey}:{}),...(input.validFrom!==undefined?{validFrom:input.validFrom}:{}),...(input.validTo!==undefined?{validTo:input.validTo}:{}),...(Array.isArray(input.entityIds)?{entityIds:input.entityIds}:{})});
   vectorIndex?.enqueue?.(saved);return saved;
  }
- async function reviseMemory(input,opts){const previous=await ensureMutable(input,opts);throwIfAborted(opts);const result=store.reviseMemory({...placementDefaults(input,previous),scopeId:scope(input),actorRole:opts?.actorRole??'unknown'});vectorIndex?.enqueue?.(result);return result;}
+ async function reviseMemory(input,opts){
+  if(typeof input.content==='string'&&containsSecret(input.content))throw fail('SECRET_REJECTED','content');
+  const previous=await ensureMutable(input,opts);throwIfAborted(opts);const result=store.reviseMemory({...placementDefaults(input,previous),scopeId:scope(input),actorRole:opts?.actorRole??'unknown'});vectorIndex?.enqueue?.(result);return result;}
  async function transitionMemory(input,opts){const previous=await ensureMutable(input,opts);throwIfAborted(opts);const result=store.transitionMemory({...placementDefaults(input,previous),scopeId:scope(input)});vectorIndex?.enqueue?.(result);return result;}
  async function reinforceMemory(input,origin={},opts){
+  if(typeof origin.sourceContent==='string'&&containsSecret(origin.sourceContent))throw fail('SECRET_REJECTED','source.content');
   await ensureMutable(input,opts);throwIfAborted(opts);const scopeId=scope(input),previous=store.getMemory(scopeId,input.id);
   const result=store.reinforceMemory({...input,scopeId,expectedRevision:input.expectedRevision??previous.revision,source:{content:origin.sourceContent??input.content??previous.content,kind:origin.kind??'repeated-observation',actorRole:origin.sourceActorRole??origin.actorRole??'unknown',complete:origin.complete!==false,...(typeof origin.lineageId==='string'?{lineageId:origin.lineageId}:{})}});
   vectorIndex?.enqueue?.(result);return result;
@@ -332,7 +350,7 @@ export function createContextService({store,legacy,config={},defaultScope=()=>co
       } finally { summaryDb.close(); }
     }
   } catch { /* 摘要合并是尽力而为：读不到旧库时不阻塞关系图 */ }
-  let nodes=[...nodeMap.values()].sort((a,b)=>(b.timestamp??0)-(a.timestamp??0));const candidateCount=nodes.length,totalEdgeCount=edges.length;if(nodes.length>limit)nodes=nodes.slice(0,limit);const kept=new Set(nodes.map(node=>node.id));const merged={nodes,edges:edges.filter(edge=>kept.has(edge.source)&&kept.has(edge.target)),stats:{nodeCount:nodes.length,edgeCount:0,totalNodeCount:candidateCount,totalEdgeCount,truncated:!!local.stats?.truncated||candidateCount>nodes.length}};merged.stats.edgeCount=merged.edges.length;
+  let nodes=[...nodeMap.values()].sort((a,b)=>(b.timestamp??0)-(a.timestamp??0));const candidateCount=nodes.length,totalEdgeCount=edges.length;if(nodes.length>limit)nodes=nodes.slice(0,limit);const kept=new Set(nodes.map(node=>node.id));const merged={nodes,edges:edges.filter(edge=>kept.has(edge.source)&&kept.has(edge.target)),stats:{nodeCount:nodes.length,edgeCount:0,totalNodeCount:candidateCount,totalEdgeCount,truncated:!!local.stats?.truncated||candidateCount>nodes.length,depthLimited:!!local.stats?.depthLimited}};merged.stats.edgeCount=merged.edges.length;
   return withGraphCommunities(graphSubset(merged,input.rootId,Number.isSafeInteger(input.depth)?input.depth:2,limit));
  }
  async function cleanDocumentInput(input,opts){
@@ -353,13 +371,23 @@ export function createContextService({store,legacy,config={},defaultScope=()=>co
   try{const result=await legacy?.listDocuments?.({scopeId,userId:scopeId,limit},opts);throwIfAborted(opts);return (result?.documents??[]).map(row=>visibleDocument(row,scopeId)).filter(Boolean);}
   catch(error){if(error?.code==='ABORTED')throw error;warnKnowledge('list',error);throw fail('STORE_UNAVAILABLE','知识库暂不可用');}
  }
- async function uploadDocument(input,opts){
+ let uploadInFlight=0;
+ const UPLOAD_CONCURRENCY=1;
+ async function withUploadSlot(run){
+  // One bounded upload at a time: a 25 MB base64 body plus parser buffers is
+  // the largest transient allocation in the host (HOST-REVIEW M6).
+  if(uploadInFlight>=UPLOAD_CONCURRENCY)throw fail('LIMIT_EXCEEDED','同时只允许一个文档解析任务，请稍后重试');
+  uploadInFlight+=1;
+  try{return await run();}finally{uploadInFlight-=1;}
+ }
+ async function uploadDocumentInner(input,opts){
   const data=await cleanDocumentInput(input,opts);throwIfAborted(opts);
   if(typeof legacy?.uploadDocument!=='function')throw fail('STORE_UNAVAILABLE','知识库暂不可用');
   try{const result=await legacy?.uploadDocument?.({...data,userId:data.scopeId},opts);throwIfAborted(opts);if(typeof result?.documentId!=='string')throw fail('STORE_FAILURE','知识库未返回文档标识');return{documentId:result.documentId,chunks:Number.isSafeInteger(result.chunks)?result.chunks:0,sourceFormat:data.metadata.sourceFormat,sourceBytes:data.metadata.sourceBytes,warningCodes:data.metadata.parseWarningCodes??[],semanticIndexed:result.semanticIndexed===true,semanticPending:result.semanticPending===true,semanticErrorCode:typeof result.semanticErrorCode==='string'?result.semanticErrorCode:null};}
   catch(error){if(['ABORTED','LIMIT_EXCEEDED','INVALID_INPUT','SECRET_REJECTED','DOCUMENT_FORMAT_UNSUPPORTED','DOCUMENT_PARSE_FAILED','DOCUMENT_PARSER_UNAVAILABLE','STORE_FAILURE'].includes(error?.code))throw error;if(error?.code==='SQLITE_FULL')throw fail('STORE_FULL','本地磁盘空间不足，知识库文件无法继续写入');warnKnowledge('upload',error);throw fail('STORE_UNAVAILABLE','知识库暂不可用');}
  }
-async function searchDocuments(input={},opts){
+async function uploadDocument(input,opts){return withUploadSlot(()=>uploadDocumentInner(input,opts));}
+ async function searchDocuments(input={},opts){
   const scopeId=scope(input),query=typeof input.query==='string'?input.query.trim():'';
    if(!query||query.length>4096)throw fail('INVALID_INPUT','请输入有效的文档检索内容');
   const limit=Number.isSafeInteger(input.limit)?Math.max(1,Math.min(50,input.limit)):12,threshold=typeof input.threshold==='number'&&Number.isFinite(input.threshold)?Math.max(-1,Math.min(1,input.threshold)):0.3;

@@ -59,6 +59,9 @@ export interface GraphBuilderOptions {
 
 const DAY_MS = 24 * 3600 * 1000
 const LABEL_MAX = 48
+/** Per-kind safety bounds; overflowing either sets stats.truncated. */
+const SUMMARY_NODE_LIMIT = 1000
+const DOCUMENT_NODE_LIMIT = 1000
 
 function truncateLabel(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim()
@@ -200,10 +203,15 @@ export function buildGraph(
        WHERE created_at >= ?
        ORDER BY created_at DESC
        LIMIT ?`,
-    ).all(Math.floor(cutoffMs / 1000), 1000).flatMap((value) => {
+    ).all(Math.floor(cutoffMs / 1000), SUMMARY_NODE_LIMIT + 1).flatMap((value) => {
       const row = summaryRow(value)
       return row === undefined ? [] : [row]
     })
+    if (summaryRows.length > SUMMARY_NODE_LIMIT) {
+      // Summary overflow is a real cut and must be reported like memory overflow.
+      truncated = true
+      summaryRows.length = SUMMARY_NODE_LIMIT
+    }
     for (const row of summaryRows) {
       nodes.push({
         id: row.id,
@@ -233,10 +241,14 @@ export function buildGraph(
        WHERE uploadedAt >= ?
        ORDER BY uploadedAt DESC
        LIMIT ?`,
-    ).all(cutoffMs, 1000).flatMap((value) => {
+    ).all(cutoffMs, DOCUMENT_NODE_LIMIT + 1).flatMap((value) => {
       const row = documentRow(value)
       return row === undefined ? [] : [row]
     })
+    if (documentRows.length > DOCUMENT_NODE_LIMIT) {
+      truncated = true
+      documentRows.length = DOCUMENT_NODE_LIMIT
+    }
     for (const row of documentRows) {
       documentIds.add(row.id)
       nodes.push({

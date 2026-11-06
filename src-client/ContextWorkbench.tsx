@@ -68,7 +68,9 @@ function MemoryManager({
   writeScopeId: string
   allowEntityEditing?: boolean
 }) {
-  const runMutation = useMutationGuard()
+  // M5: bind the guard to the write scope. Switching scope aborts in-flight
+  // writes so a response can never land on the newly selected scope.
+  const runMutation = useMutationGuard(writeScopeId)
   const [query, setQuery] = useState(''),
     [lifecycle, setLifecycle] = useState<LifecycleFilter>('all'),
     [layerFilter, setLayerFilter] = useState<'all' | MemoryLayer>('all'),

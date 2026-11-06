@@ -4,7 +4,8 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "strict": false,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
     "skipLibCheck": true,
     "allowJs": true,
     "checkJs": false,
@@ -12,10 +13,13 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": []
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
   },
   "include": [
-    "src",
-    "src-client"
-  ]
+    "src/**/*.ts",
+    "src-client/**/*.ts",
+    "src-client/**/*.tsx"
+  ],
+  "exclude": ["node_modules", "lib", "artifacts"]
 }

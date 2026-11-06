@@ -5,7 +5,7 @@ description: "Automatic memory, scoped recall, ontology graph, and local documen
 kind: "package-bundle"
 ---
 
-# @deepseek/dsh-agentos-context
+# @wilshi/dsh-agentos-context
 
 English | [中文](README.zh.md)
 
@@ -30,17 +30,19 @@ agentOS Context adds automatic long-term memory, scoped recall, a source-backed 
 DSH Web and Desktop already mount this package through `dsh-web-app`. Open **Settings → Memory** to configure capture, recall, embeddings, distillation and retention, or use the Memory workspace for the list, graph, review and knowledge views. The Settings row and Conversation tab follow the active DSH language. A profile that does not include `dsh-web-app` can activate or remove the installed bundle explicitly:
 
 ```text
-dsh plugin --profile <name> add @deepseek/dsh-agentos-context
-dsh plugin --profile <name> remove @deepseek/dsh-agentos-context
+dsh plugin --profile <name> add @wilshi/dsh-agentos-context
+dsh plugin --profile <name> remove @wilshi/dsh-agentos-context
 ```
 
-Adding the bundle mounts the current implementation on the compatibility `dsh-opencontext` Loader row. Official Settings therefore imports the old section into the same namespace, preserves its values, and applies editable capture, recall, embedding, distillation, retention and scope fields live without remounting the plugin. The command fails if the installed package does not expose its `dsh.bundle.patch` declaration.
+Adding the bundle mounts the current implementation on the compatibility `dsh-opencontext` Loader row. Official Settings therefore imports the old section into the same namespace and preserves its values. Fields marked volatile apply live without remounting the plugin, but some volatile switches (including automatic capture) are process-local and return to their defaults after a restart; check the persistence semantics rather than assuming every switch is permanent. Explicit Settings values take precedence over environment variables, which only provide defaults when a field was not explicitly configured. The command fails if the installed package does not expose its `dsh.bundle.patch` declaration.
 
 ### Automatic memory and recall
 
 Automatic human-prompt capture is enabled by default and can be disabled. Accepted prompts are distilled when a configured model is available; a temporary distillation failure retains a low-importance working memory for 24 hours instead of dropping the prompt. Recall searches authorized scopes in `run → agent → workspace → user → app → global` order, keeps run memory inside one Session, and injects only bounded evidence for the accepted user query.
 
-The 3+1 hierarchy stores working, episodic, semantic and procedural layers independently from memory type. Repeated evidence can reinforce and promote a record; approximate conflicts become review candidates rather than overwriting an established fact. Explicitly saved local content remains lossless, including credential-like text; this package does not apply DLP scanning or automatic masking.
+The 3+1 hierarchy stores working, episodic, semantic and procedural layers independently from memory type. Repeated evidence can reinforce and promote a record; approximate conflicts become review candidates rather than overwriting an established fact. Credential-shaped content is explicitly protected: automatic capture skips prompts that look like keys, tokens or private keys, and explicit save/revise/reinforce returns `SECRET_REJECTED` instead of sending the content to a distillation gateway or writing it into the sidecar. Log redaction covers common GitHub, AWS, GitLab, npm, PEM and Bearer/Basic forms. Ordinary local content remains lossless.
+
+Workspace scopes such as `local:`, `run:` and `session:` remain available over RPC. `user:`, `agent:` and `app:` identity scopes are limited to the current trusted Session identity or explicitly configured identities; `scopes` and `bootstrap` only expose visible partitions. Legacy integrations can opt into the old behavior with `allowForeignScopeIds=true` (or `AGENTOS_CONTEXT_ALLOW_FOREIGN_SCOPE_IDS`), but this is not recommended for multi-user or remote deployments.
 
 Searching the compact conversation Memory view is executed by every underlying scope instead of filtering only the recent records already loaded in the browser. The results are merged and ranked back into the aggregate view, so older matching memories remain discoverable without changing the active workspace.
 
@@ -58,6 +60,8 @@ In Desktop, leaving native fullscreen also closes graph fullscreen when the DOM 
 
 Legacy OpenContext memories and document references remain read-only inputs and are never rewritten at startup. The package preserves the `dsh-opencontext` settings namespace, reads compatibility identifiers, and keeps callable `oc_*` aliases while presenting `memory_*`, `knowledge_*` and `context_*` names. New revisions, retirements, usage traces and ontology state live in the agentOS Context sidecar; schema-v1 sidecars migrate additively to schema v2.
 
+If the sidecar or native SQLite dependencies fail to initialize, the plugin stays loaded and reports `STORE_UNAVAILABLE` instead of taking down the whole memory surface; native knowledge dependencies load on demand. Graph statistics distinguish `truncated` (actual clipping) from `depthLimited` (a caller-requested depth boundary), and default nodes are selected by record time. Isolated nodes are merged into an unclustered community instead of producing one community per node. Review transitions are limited to pending → confirmed/rejected; confirmed → rejected is a retraction, and rejected relations cannot be directly confirmed again.
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -66,7 +70,7 @@ Legacy OpenContext memories and document references remain read-only inputs and 
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The bundle patch inserts one dual-face Cordis package. Its Host face opens the compatibility backend and sidecar, registers authenticated `agentos-context/v1/*` RPC routes, model tools, the runtime skill and agent lifecycle listeners. Its Client face installs the first-level Memory settings section and workbench views. Browser operations use authenticated Connection RPC instead of legacy raw browser routes. Modal views use the shared Client UI primitive for focus containment, Escape handling and focus restoration, while this package owns only their content and layout.
+The bundle patch inserts one dual-face Cordis package. Its Host face opens the compatibility backend and sidecar, registers authenticated `agentos-context/v1/*` RPC routes, model tools, the runtime skill and agent lifecycle listeners. Its Client face installs the first-level Memory settings section and workbench views. Browser operations use authenticated Connection RPC instead of legacy raw browser routes. Modal views use package-local UI primitives for focus containment, topmost-only Escape handling and focus restoration, while this package owns their content and layout.
 
 Legacy OpenContext storage loads on its first operation, not while importing the plugin for CLI help or schema inspection. Disposing an unused compatibility backend closes any owned document store without loading legacy storage.
 

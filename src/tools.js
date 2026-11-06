@@ -137,7 +137,7 @@ function mergeScopedRows(batches) {
 }
 async function locateMemoryScope(backend, plan, id, ctx) {
     for (const scopeId of plan.scopeIds) {
-        const rows = await backend.get({ ids: [id], scopeId, userId: scopeId }, { signal: ctx.signal, timeoutMs: plan.timeoutMs });
+        const rows = await backend.get({ ids: [id], scopeId, userId: scopeId, sessionId: plan.sessionId }, { signal: ctx.signal, timeoutMs: plan.timeoutMs });
         if (rows?.length) return scopeId;
     }
     return plan.scopeId;
@@ -208,12 +208,13 @@ function makeTools(backend, config) {
             const content = String(args.content ?? "").trim();
             if (!content)
                 return toolError("invalid_arguments", "content is required");
-            const { scopeId, userId } = asScopeConfig(ctx, config, args.scope);
+            const { scopeId, userId, sessionId } = asScopeConfig(ctx, config, args.scope);
             const result = await backend.remember({
                 content,
                 metadata: asRecord(args.metadata),
                 scopeId,
                 userId,
+                sessionId,
             }, { signal: ctx.signal, timeoutMs: config.timeoutMs });
             return toolOk({ ids: result.ids });
         }),
@@ -241,6 +242,7 @@ function makeTools(backend, config) {
                 since: typeof args.since === "number" ? args.since : undefined,
                 scopeId,
                 userId: scopeId,
+                sessionId: plan.sessionId,
             }, { signal: ctx.signal, timeoutMs: config.timeoutMs })));
             return toolOk({ items: sortMemoryRows(mergeScopedRows(batches)).slice(0, limit) });
         }),
@@ -271,7 +273,7 @@ function makeTools(backend, config) {
             if (ids.length === 0)
                 return toolError("invalid_arguments", "ids must be a non-empty array");
             const plan = await asReadScopeConfig(backend, ctx, config, args.scope);
-            const batches = await Promise.all(plan.scopeIds.map(scopeId => backend.get({ ids, scopeId, userId: scopeId }, { signal: ctx.signal, timeoutMs: config.timeoutMs })));
+            const batches = await Promise.all(plan.scopeIds.map(scopeId => backend.get({ ids, scopeId, userId: scopeId, sessionId: plan.sessionId }, { signal: ctx.signal, timeoutMs: config.timeoutMs })));
             return toolOk({ items: mergeScopedRows(batches) });
         }),
     });
@@ -306,6 +308,7 @@ function makeTools(backend, config) {
                 reason: typeof args.reason === "string" ? args.reason : undefined,
                 scopeId,
                 userId,
+                sessionId: plan.sessionId,
             }, { signal: ctx.signal, timeoutMs: config.timeoutMs });
             return toolOk({
                 deprecatedId: result.deprecatedId,
@@ -339,6 +342,7 @@ function makeTools(backend, config) {
                 reason: typeof args.reason === "string" ? args.reason : undefined,
                 scopeId,
                 userId,
+                sessionId: plan.sessionId,
             }, { signal: ctx.signal, timeoutMs: config.timeoutMs });
             return toolOk({ ok: true });
         }),
@@ -411,13 +415,14 @@ function makeTools(backend, config) {
             const content = String(args.content ?? "").trim();
             if (!content)
                 return toolError("invalid_arguments", "content is required");
-            const { scopeId, userId } = asScopeConfig(ctx, config, args.scope);
+            const { scopeId, userId, sessionId } = asScopeConfig(ctx, config, args.scope);
             const result = await backend.captureSource({
                 content,
                 sourceType: typeof args.sourceType === "string" ? args.sourceType : "user_input",
                 metadata: asRecord(args.metadata),
                 scopeId,
                 userId,
+                sessionId,
             }, { signal: ctx.signal, timeoutMs: config.timeoutMs });
             return toolOk({ id: result.id });
         }),

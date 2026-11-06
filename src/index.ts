@@ -116,6 +116,12 @@ export interface Config {
   scopeAgentId: Volatile<string>
   /** Optional trusted application identity for a cross-Workspace app scope. */
   scopeAppId: Volatile<string>
+  /**
+   * Opt-out of the identity-scope authorization introduced in 0.7.1. When true,
+   * any user:/agent:/app: scope id the caller names is accepted (previous
+   * behavior); workspace, run and global scopes are always available.
+   */
+  allowForeignScopeIds?: boolean
 }
 
 /** Schemastery validator used by Loader configuration and settings. */
