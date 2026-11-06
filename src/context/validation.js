@@ -67,6 +67,14 @@ export function identifier(value, field = 'id') {
   if (typeof value !== 'string' || !value.length || value.length > 256 || value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value) || FORBIDDEN_KEYS.has(value) || !value.isWellFormed()) fail('INVALID_INPUT', field);
   return value;
 }
+/** Graph node reference (rootId): identifier plus the charset real node ids use. */
+const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
+export function nodeId(value, field = 'rootId') {
+  const id = identifier(value, field);
+  // Prose such as "not a valid id!!" is a caller mistake, not an empty graph.
+  if (!NODE_ID_PATTERN.test(id)) fail('INVALID_INPUT', field);
+  return id;
+}
 export function text(value, field = 'content', maxBytes = LIMITS.content) {
   if (typeof value !== 'string' || !value.trim() || value.length > maxBytes || Buffer.byteLength(value, 'utf8') > maxBytes || value.includes('\u0000') || !value.isWellFormed()) fail('INVALID_INPUT', field);
   return value;

@@ -72,6 +72,28 @@ function cssColor(name: string, fallback: string): Rgb {
   )
 }
 
+/** 创建 renderer 之前先探测 WebGL 能力，避免 THREE.WebGLRenderer 在禁用环境里先打一串错误日志。 */
+function probeWebGLSupport(): { ok: boolean; reason: string } {
+  if (typeof document === 'undefined') return { ok: false, reason: '当前环境没有 DOM，无法创建 WebGL 画布' }
+  try {
+    const canvas = document.createElement('canvas')
+    const attributes: WebGLContextAttributes = {
+      alpha: true,
+      antialias: true,
+      powerPreference: 'high-performance',
+      failIfMajorPerformanceCaveat: false,
+    }
+    const context = (canvas.getContext('webgl2', attributes) ??
+      canvas.getContext('webgl', attributes)) as WebGLRenderingContext | null
+    if (!context) return { ok: false, reason: '当前设备或远程桌面环境未启用 WebGL' }
+    // 预检用的 context 立即释放，避免占用浏览器 WebGL 上下文配额。
+    context.getExtension('WEBGL_lose_context')?.loseContext()
+    return { ok: true, reason: '' }
+  } catch {
+    return { ok: false, reason: '当前设备或远程桌面环境未启用 WebGL' }
+  }
+}
+
 function themePalette(): Palette {
   const accent = cssColor('--dsw-alias-brand-primary', '#6689b9')
   const secondary = cssColor('--dsw-alias-label-secondary', '#8793a4')
@@ -399,6 +421,11 @@ export function ContextGraph3D({
     if (!element) return
     let disposed = false
     let cleanUp = () => {}
+    const webglSupport = probeWebGLSupport()
+    if (!webglSupport.ok) {
+      callbacks.current.onUnavailable(webglSupport.reason)
+      return () => { disposed = true }
+    }
     try {
       const palette = themePalette()
       const width = Math.max(320, element.clientWidth || 760)

@@ -321,3 +321,48 @@ test('usage: stored event time stays in the sidecar monotonic domain', () => {
   assert.ok(Number.isSafeInteger(committed.at) && committed.at > usage.at);
   store.close();
 });
+// graph stats + rootId validation (task-37) --------------------------------
+async function graphFixture() {
+  const store = createContextStore({ dbPath: ':memory:' });
+  const scopeId = 'local:graph-stats';
+  const type = store.getSchema().types[0].id;
+  const entity = store.createEntity({ scopeId, name: 'Hub', type });
+  for (let i = 0; i < 12; i += 1) store.saveMemory({ scopeId, content: 'graph fact ' + i, entityIds: [entity.id] });
+  const service = createContextService({ store, legacy: undefined, config: {}, sessions: undefined });
+  return { store, service, scopeId, entity };
+}
+test('graph: totals describe the full projection while counts describe the window', async () => {
+  const { store, service, scopeId, entity } = await graphFixture();
+  const full = await service.graph({ scopeId });
+  assert.equal(full.stats.truncated, false);
+  assert.equal(full.stats.nodeCount, full.stats.totalNodeCount);
+  assert.equal(full.stats.edgeCount, full.stats.totalEdgeCount);
+  assert.ok(full.stats.totalNodeCount > 5);
+  const windowed = await service.graph({ scopeId, limit: 5 });
+  assert.equal(windowed.stats.nodeCount, 5);
+  assert.equal(windowed.stats.totalNodeCount, full.stats.totalNodeCount);
+  assert.equal(windowed.stats.totalEdgeCount, full.stats.totalEdgeCount);
+  assert.equal(windowed.stats.truncated, true);
+  const explicitFull = await service.graph({ scopeId, limit: 2000 });
+  assert.equal(explicitFull.stats.totalNodeCount, full.stats.totalNodeCount);
+  assert.equal(explicitFull.stats.truncated, false);
+  // A rooted query keeps full reachable totals and a root-first window.
+  const rooted = await service.graph({ scopeId, rootId: entity.id, depth: 1, limit: 1 });
+  assert.equal(rooted.stats.nodeCount, 1);
+  assert.equal(rooted.nodes[0].id, entity.id);
+  assert.ok(rooted.stats.totalNodeCount > 1);
+  assert.equal(rooted.stats.truncated, true);
+  store.close();
+});
+test('graph: malformed rootId is INVALID_INPUT; well-formed missing root stays empty', async () => {
+  const { store, service, scopeId } = await graphFixture();
+  for (const bad of ['not a valid id!!', ' padded ', 'has space', 'entity:\u0000bad', '']) {
+    assert.throws(() => store.graph({ scopeId, rootId: bad }), { code: 'INVALID_INPUT' });
+    await assert.rejects(service.graph({ scopeId, rootId: bad }), { code: 'INVALID_INPUT' });
+  }
+  const missing = await service.graph({ scopeId, rootId: 'entity:missing-but-wellformed', depth: 2 });
+  assert.deepEqual(missing.nodes, []);
+  assert.equal(missing.stats.nodeCount, 0);
+  assert.equal(missing.stats.totalNodeCount, 0);
+  store.close();
+});

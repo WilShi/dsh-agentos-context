@@ -466,7 +466,7 @@ export function createContextStore(options) {
     graph(input) {
       const data = v.objectInput(input, ['scopeId', 'rootId', 'depth', 'includePending', 'limit', 'knownAt', 'validAt']);
       const scopeId = v.identifier(data.scopeId, 'scopeId');
-      const rootId = data.rootId === undefined ? undefined : v.identifier(data.rootId, 'rootId');
+      const rootId = data.rootId === undefined ? undefined : v.nodeId(data.rootId, 'rootId');
       const depth = data.depth === undefined ? 2 : v.integer(data.depth, 'depth', 0, v.LIMITS.graphDepth);
       const includePending = data.includePending === undefined ? false : v.boolean(data.includePending, 'includePending');
       return projectGraph(db, { scopeId, rootId, depth, includePending, limit: v.limit(data.limit, 100, v.LIMITS.graph), observedAt: data.knownAt === undefined ? v.timestamp(now(), 'now') : data.knownAt, ...v.timeFilter(data) });

@@ -116,13 +116,27 @@ function rankOf(row,retrievalScore,modes){
  return Math.min(1.25,retrievalScore+fusionBonus+importance*.08+recency*.03+layerBoost);
 }
 function graphLabel(value){const flat=String(value??'').replace(/\s+/g,' ').trim();return flat.length>48?flat.slice(0,47)+'…':flat;}
+/** Slice a full projection to the requested window while keeping full totals. */
+function windowGraph(graph,limit){
+ const nodes=graph.nodes.slice(0,limit),ids=new Set(nodes.map(node=>node.id));
+ const edges=graph.edges.filter(edge=>ids.has(edge.source)&&ids.has(edge.target));
+ return{nodes,edges,stats:{...graph.stats,nodeCount:nodes.length,edgeCount:edges.length,totalNodeCount:graph.nodes.length,totalEdgeCount:graph.edges.length,truncated:!!graph.stats?.truncated||graph.nodes.length>nodes.length}};
+}
 function graphSubset(graph,rootId,depth,limit){
  if(!rootId)return graph;
- const nodes=new Map(graph.nodes.map(node=>[node.id,node]));if(!nodes.has(rootId))return{nodes:[],edges:[],stats:{...graph.stats,nodeCount:0,edgeCount:0}};
+ const nodes=new Map(graph.nodes.map(node=>[node.id,node]));if(!nodes.has(rootId))return{nodes:[],edges:[],stats:{...graph.stats,nodeCount:0,edgeCount:0,totalNodeCount:0,totalEdgeCount:0,truncated:false}};
  const adjacency=new Map();for(const edge of graph.edges){if(!nodes.has(edge.source)||!nodes.has(edge.target))continue;for(const [a,b] of [[edge.source,edge.target],[edge.target,edge.source]]){const set=adjacency.get(a)??new Set();set.add(b);adjacency.set(a,set);}}
- const selected=new Set([rootId]),queue=[[rootId,0]];while(queue.length){const [id,d]=queue.shift();if(d>=depth)continue;for(const next of adjacency.get(id)??[]){if(selected.has(next)||selected.size>=limit)continue;selected.add(next);queue.push([next,d+1]);}}
- const keptNodes=graph.nodes.filter(node=>selected.has(node.id)).slice(0,limit),ids=new Set(keptNodes.map(node=>node.id));const edges=graph.edges.filter(edge=>ids.has(edge.source)&&ids.has(edge.target));
- return{nodes:keptNodes,edges,stats:{...graph.stats,nodeCount:keptNodes.length,edgeCount:edges.length,truncated:graph.stats.truncated||selected.size>keptNodes.length}};
+ // Expand to the hard bound so totals describe the whole reachable component;
+ // the returned window is still limited to `limit` below.
+ const cap=GRAPH_LIMIT,selected=new Set([rootId]),order=[rootId],queue=[[rootId,0]];let limitHit=false;
+ while(queue.length){const [id,d]=queue.shift();if(d>=depth)continue;for(const next of adjacency.get(id)??[]){if(selected.has(next))continue;if(selected.size>=cap){limitHit=true;continue;}selected.add(next);order.push(next);queue.push([next,d+1]);}}
+ const reachable=order.map(id=>nodes.get(id)).filter(Boolean);
+ // Root first, then nearest: a limited window of a rooted query must still
+ // contain the root (and its closest neighbourhood).
+ const keptNodes=reachable.slice(0,limit),ids=new Set(keptNodes.map(node=>node.id));
+ const edges=graph.edges.filter(edge=>ids.has(edge.source)&&ids.has(edge.target));
+ const totalEdges=graph.edges.filter(edge=>selected.has(edge.source)&&selected.has(edge.target)).length;
+ return{nodes:keptNodes,edges,stats:{...graph.stats,nodeCount:keptNodes.length,edgeCount:edges.length,totalNodeCount:reachable.length,totalEdgeCount:totalEdges,truncated:!!graph.stats?.truncated||limitHit||reachable.length>keptNodes.length}};
 }
 export function createContextService({store,legacy,config={},defaultScope=()=>config.scopeId||'local:'+process.cwd(),sessions,vectorIndex}){
  let legacyWarning=null,legacyScanWarning=null;
@@ -306,7 +320,16 @@ export function createContextService({store,legacy,config={},defaultScope=()=>co
  async function graph(input,opts){
   const scopeId=scope(input),limit=Number.isSafeInteger(input.limit)?Math.min(input.limit,GRAPH_LIMIT):GRAPH_LIMIT;
   if(!temporal(input))maintain(scopeId);
-  const local=store.graph({...input,scopeId,limit});if(temporal(input))return withGraphCommunities(local);
+  // Project at the hard safety bound once, then slice the returned window:
+  // stats.totalNodeCount/totalEdgeCount must describe the whole depth-bounded
+  // graph rather than the limit window. The projection stays bounded by
+  // GRAPH_LIMIT / LIMITS.graphEdges, so this is not an unbounded scan.
+  const local=store.graph({...input,scopeId,limit:GRAPH_LIMIT});
+  const depth=Number.isSafeInteger(input.depth)?input.depth:2;
+  if(temporal(input)){
+   const full={...local,stats:{...local.stats,totalNodeCount:local.nodes.length,totalEdgeCount:local.edges.length}};
+   return withGraphCommunities(input.rootId===undefined?windowGraph(full,limit):graphSubset(full,input.rootId,depth,limit));
+  }
   const legacyRows=await legacyListPages({userId:scopeId},opts,{cap:LEGACY_SCOPE_SCAN_LIMIT,reportPaging:true}),nodeMap=new Map(local.nodes.map(node=>[node.id,node])),edges=[...local.edges];
   const usable=[];for(const raw of legacyRows){if(scopeOf(raw)!==scopeId||typeof raw?.id!=='string'||typeof raw?.content!=='string'||store.getMemory(scopeId,raw.id))continue;const row=legacyMemory(raw);usable.push(row);nodeMap.set(row.id,{id:row.id,type:'memory',subtype:typeof row.metadata?.sourceType==='string'?row.metadata.sourceType:undefined,label:graphLabel(row.content),timestamp:row.recordedAt??undefined,scopeId,legacy:true});}
   try{const result=await legacy?.listDocuments?.({scopeId,userId:scopeId,limit:Math.min(limit,200)},opts);for(const doc of result?.documents??[]){if(typeof doc?.id!=='string'||nodeMap.has(doc.id))continue;nodeMap.set(doc.id,{id:doc.id,type:'document',label:graphLabel(doc.filename??doc.id),timestamp:doc.uploadedAt,scopeId,legacy:true});}}catch{}
@@ -350,8 +373,11 @@ export function createContextService({store,legacy,config={},defaultScope=()=>co
       } finally { summaryDb.close(); }
     }
   } catch { /* 摘要合并是尽力而为：读不到旧库时不阻塞关系图 */ }
-  let nodes=[...nodeMap.values()].sort((a,b)=>(b.timestamp??0)-(a.timestamp??0));const candidateCount=nodes.length,totalEdgeCount=edges.length;if(nodes.length>limit)nodes=nodes.slice(0,limit);const kept=new Set(nodes.map(node=>node.id));const merged={nodes,edges:edges.filter(edge=>kept.has(edge.source)&&kept.has(edge.target)),stats:{nodeCount:nodes.length,edgeCount:0,totalNodeCount:candidateCount,totalEdgeCount,truncated:!!local.stats?.truncated||candidateCount>nodes.length,depthLimited:!!local.stats?.depthLimited}};merged.stats.edgeCount=merged.edges.length;
-  return withGraphCommunities(graphSubset(merged,input.rootId,Number.isSafeInteger(input.depth)?input.depth:2,limit));
+  const nodes=[...nodeMap.values()].sort((a,b)=>(b.timestamp??0)-(a.timestamp??0));
+  // Full merged projection (bounded by the projection caps); the root-aware
+  // window and stats.totals are derived below without touching these counts.
+  const full={nodes,edges,stats:{nodeCount:nodes.length,edgeCount:edges.length,totalNodeCount:nodes.length,totalEdgeCount:edges.length,truncated:!!local.stats?.truncated,depthLimited:!!local.stats?.depthLimited}};
+  return withGraphCommunities(input.rootId===undefined?windowGraph(full,limit):graphSubset(full,input.rootId,depth,limit));
  }
  async function cleanDocumentInput(input,opts){
   const scopeId=scope(input),filename=typeof input?.filename==='string'?input.filename.trim():'',mimeType=typeof input?.mimeType==='string'?input.mimeType.trim():'application/octet-stream';
