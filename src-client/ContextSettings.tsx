@@ -8,6 +8,7 @@ import {
   useMutationGuard,
 } from './context-ui-helpers.tsx'
 import styles from './Context.module.css'
+import { t } from './i18n.ts'
 export function ContextSettings({
   api,
   scopeId,
@@ -47,8 +48,8 @@ export function ContextSettings({
       )
       setResult(
         out.ok
-          ? '类型与方向符合当前定义。'
-          : out.errors.map(x => x.message).join('；'),
+          ? t('settings.check.ok')
+          : out.errors.map(x => x.message).join(t('common.listSeparator')),
       )
     } catch (e) {
       if ((e as Error).name !== 'AbortError') setResult(plainError(e))
@@ -59,52 +60,48 @@ export function ContextSettings({
   return (
     <div className={styles.stack}>
       <section className={styles.panel}>
-        <h3 className={styles.sectionTitle}>当前能力</h3>
+        <h3 className={styles.sectionTitle}>{t('settings.capabilities')}</h3>
         <div className={styles.badges}>
           <Tag tone={bootstrap.features.capture ? 'success' : 'neutral'}>
-            自动记忆 {bootstrap.features.capture ? '开启' : '关闭'}
+            {t('settings.feature.capture')} {bootstrap.features.capture ? t('common.enabled') : t('common.disabled')}
           </Tag>
           <Tag tone={bootstrap.features.recall ? 'success' : 'neutral'}>
-            回答召回 {bootstrap.features.recall ? '开启' : '关闭'}
+            {t('settings.feature.recall')} {bootstrap.features.recall ? t('common.enabled') : t('common.disabled')}
           </Tag>
           <Tag tone={bootstrap.features.ontology ? 'success' : 'neutral'}>
-            关联理解 {bootstrap.features.ontology ? '开启' : '关闭'}
+            {t('settings.feature.ontology')} {bootstrap.features.ontology ? t('common.enabled') : t('common.disabled')}
           </Tag>
         </div>
         <p className={styles.hint}>
-          模型、密钥和自动记忆配置仍在插件设置卡管理；这里不复制一套配置。
+          {t('settings.hint.managed')}
         </p>
       </section>
       <section className={styles.panel}>
-        <h3 className={styles.sectionTitle}>记忆范围</h3>
+        <h3 className={styles.sectionTitle}>{t('aria.memoryScope')}</h3>
         <p className={styles.hint}>
           {bootstrap.globalScope
-            ? '自动捕获默认写入当前 Workspace；全局记忆可由用户明确保存或从工作区复制。回答时会自动联合检索当前 Workspace 与全局记忆，其他 Workspace 的私有记忆不会串入。'
-            : '当前管理员配置固定了单一记忆范围，不启用跨范围的全局层。'}
+            ? t('settings.scopeHint.global')
+            : t('settings.scopeHint.single')}
         </p>
       </section>
       <section className={styles.panel}>
-        <h3 className={styles.sectionTitle}>升级与回滚兼容</h3>
+        <h3 className={styles.sectionTitle}>{t('settings.compat.title')}</h3>
         <p className={styles.hint}>
-          旧 OpenContext
-          记忆保持原位并按页只读加载，升级不会重写旧数据库；新建、修订和停用记录写入
-          agentOS context
-          侧车库。若回滚到只识别旧库的插件，新写入内容不可见，且在新版中停用的旧记录可能重新出现。回滚前请保留两个数据库的完整备份。
+          {t('settings.compat.body')}
         </p>
       </section>
       <section className={styles.panel}>
-        <h3 className={styles.sectionTitle}>类型与关系</h3>
+        <h3 className={styles.sectionTitle}>{t('settings.types.title')}</h3>
         {schemaState.error && (
           <p className={styles.errorText} role="alert">
             {schemaState.error}
-            <Button onClick={schemaState.reload}>重试</Button>
+            <Button onClick={schemaState.reload}>{t('common.retry')}</Button>
           </p>
         )}
         {schema && (
           <>
             <p className={styles.meta}>
-              本体版本 {schema.version} ·
-              有限类型与受控关系，不执行任意OWL或脚本。
+              {t('settings.types.meta', { version: schema.version })}
             </p>
             <div className={styles.badges}>
               {schema.types.map(t => (
@@ -116,9 +113,9 @@ export function ContextSettings({
             <table className={styles.schemaTable}>
               <thead>
                 <tr>
-                  <th>关系</th>
-                  <th>主语类型</th>
-                  <th>宾语类型</th>
+                  <th>{t('workbench.field.relation')}</th>
+                  <th>{t('settings.table.subjectType')}</th>
+                  <th>{t('settings.table.objectType')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -135,22 +132,22 @@ export function ContextSettings({
         )}
       </section>
       <section className={styles.panel}>
-        <h3 className={styles.sectionTitle}>关系类型校验</h3>
+        <h3 className={styles.sectionTitle}>{t('settings.check.title')}</h3>
         {entityState.phase === 'loading' ? (
-          <p className={styles.loading}>正在读取对象…</p>
+          <p className={styles.loading}>{t('workbench.loading.entities')}</p>
         ) : entityState.error ? (
           <p className={styles.errorText} role="alert">
-            对象暂不可用：{entityState.error}
-            <Button onClick={entityState.reload}>重试</Button>
+            {t('settings.entitiesUnavailable', { error: entityState.error })}
+            <Button onClick={entityState.reload}>{t('common.retry')}</Button>
           </p>
         ) : entities.length < 2 ? (
-          <p className={styles.muted}>至少创建两个对象后，才能验证关系方向。</p>
+          <p className={styles.muted}>{t('settings.needTwoEntities')}</p>
         ) : !schema?.relations.length ? (
-          <p className={styles.muted}>当前本体没有可校验的关系定义。</p>
+          <p className={styles.muted}>{t('settings.noRelations')}</p>
         ) : (
           <div className={styles.form}>
             <div className={styles.field}>
-              <label>主语对象</label>
+              <label>{t('workbench.field.subject')}</label>
               <select
                 value={subject}
                 onChange={e => setSubject(e.currentTarget.value)}
@@ -163,7 +160,7 @@ export function ContextSettings({
               </select>
             </div>
             <div className={styles.field}>
-              <label>关系</label>
+              <label>{t('workbench.field.relation')}</label>
               <select
                 value={predicate}
                 onChange={e => setPredicate(e.currentTarget.value)}
@@ -176,7 +173,7 @@ export function ContextSettings({
               </select>
             </div>
             <div className={styles.field}>
-              <label>宾语对象</label>
+              <label>{t('workbench.field.object')}</label>
               <select
                 value={object}
                 onChange={e => setObject(e.currentTarget.value)}
@@ -194,7 +191,7 @@ export function ContextSettings({
                 disabled={busy || !subject || !object || !predicate}
                 onClick={() => void check()}
               >
-                校验
+                {t('settings.action.check')}
               </Button>
             </div>
             {result && (

@@ -6,6 +6,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import type { ContextGraphEdge, ContextGraphNode } from './context-types.ts'
 import styles from './Context.module.css'
+import { localized, t } from './i18n.ts'
 
 type GraphInput = { nodes: ContextGraphNode[]; edges: ContextGraphEdge[] }
 type Hovered = { label: string; type: string; x: number; y: number } | null
@@ -25,13 +26,8 @@ type Palette = {
 export type GraphLayoutMode = 'community' | 'structure' | 'timeline'
 export type GraphSelectIntent = { shiftKey?: boolean; doubleClick?: boolean }
 
-const typeLabels: Record<string, string> = {
-  memory: '记忆',
-  entity: '对象',
-  document: '知识文档',
-  source: '来源证据',
-  community: '社区',
-}
+const typeLabelMap = localized<'memory'|'entity'|'document'|'source'|'community'>('graph.nodeType')
+const typeLabels: Record<string, string> = new Proxy({} as Record<string, string>, { get: (_target, key) => key === 'memory' ? t('nav') : typeof key === 'string' ? typeLabelMap[key as 'entity'|'document'|'source'|'community'] : undefined })
 
 function stableUnit(value: string): number {
   let hash = 2166136261
@@ -74,7 +70,7 @@ function cssColor(name: string, fallback: string): Rgb {
 
 /** 创建 renderer 之前先探测 WebGL 能力，避免 THREE.WebGLRenderer 在禁用环境里先打一串错误日志。 */
 function probeWebGLSupport(): { ok: boolean; reason: string } {
-  if (typeof document === 'undefined') return { ok: false, reason: '当前环境没有 DOM，无法创建 WebGL 画布' }
+  if (typeof document === 'undefined') return { ok: false, reason: t('graph3d.error.noDom') }
   try {
     const canvas = document.createElement('canvas')
     const attributes: WebGLContextAttributes = {
@@ -85,12 +81,12 @@ function probeWebGLSupport(): { ok: boolean; reason: string } {
     }
     const context = (canvas.getContext('webgl2', attributes) ??
       canvas.getContext('webgl', attributes)) as WebGLRenderingContext | null
-    if (!context) return { ok: false, reason: '当前设备或远程桌面环境未启用 WebGL' }
+    if (!context) return { ok: false, reason: t('graph3d.error.noWebgl') }
     // 预检用的 context 立即释放，避免占用浏览器 WebGL 上下文配额。
     context.getExtension('WEBGL_lose_context')?.loseContext()
     return { ok: true, reason: '' }
   } catch {
-    return { ok: false, reason: '当前设备或远程桌面环境未启用 WebGL' }
+    return { ok: false, reason: t('graph3d.error.noWebgl') }
   }
 }
 
@@ -127,7 +123,7 @@ const LAYER_TONES: Record<string, Rgb> = {
   semantic: { r: 63, g: 131, b: 216 },
   procedural: { r: 47, g: 158, b: 120 },
 }
-const TONE_LABELS: Record<string, string> = { working: '工作记忆', episodic: '情节记忆', semantic: '语义记忆', procedural: '程序记忆', entity: '对象', document: '知识文档', summary: '摘要', source: '来源证据', community: '社区' }
+const TONE_LABELS = localized<'working'|'episodic'|'semantic'|'procedural'|'entity'|'document'|'source'|'summary'|'community'>('graph.tone')
 function nodeTone3D(node: { type: string; layer?: string; subtype?: string }): string {
   if (node.type !== 'memory') return node.type
   if (node.layer !== undefined && LAYER_TONES[node.layer] !== undefined) return node.layer
@@ -250,7 +246,7 @@ export function pointCloudPermanentLabel(
   const value = label(node)
   const size = (node as CommunityVisualNode).community?.size
   const compact = value.length > 20 ? `${value.slice(0, 19)}…` : value
-  return Number.isFinite(size) && size! > 0 ? `${compact} · ${size} 项` : compact
+  return Number.isFinite(size) && size! > 0 ? `${compact} · ${t('graph3d.sizeItems', { size })}` : compact
 }
 
 export function pointCloudNodeRadius(
@@ -452,7 +448,7 @@ export function ContextGraph3D({
       renderer.domElement.setAttribute('role', 'img')
       renderer.domElement.setAttribute(
         'aria-label',
-        `3D 记忆图谱，共 ${graph.nodes.length} 个真实节点、${graph.edges.length} 条关系；方向键旋转，Enter 选中中心/悬停节点`,
+        t('graph3d.aria.canvas', { nodes: graph.nodes.length, edges: graph.edges.length }),
       )
       renderer.domElement.tabIndex = 0
       element.replaceChildren(renderer.domElement)
@@ -902,7 +898,7 @@ export function ContextGraph3D({
         if (edgeHit?.userData.edge) {
           const edge = edgeHit.userData.edge as ContextGraphEdge
           renderer.domElement.style.cursor = 'pointer'
-          setHovered({ label: edge.type, type: '关系', ...at })
+          setHovered({ label: edge.type, type: t('workbench.field.relation'), ...at })
           if (choose) callbacks.current.onSelectEdge(edge)
           return true
         }
@@ -936,7 +932,7 @@ export function ContextGraph3D({
       }
       const contextLost = (event: Event) => {
         event.preventDefault()
-        if (!disposed) callbacks.current.onUnavailable('图形设备已重置')
+        if (!disposed) callbacks.current.onUnavailable(t('graph3d.unavailable.deviceReset'))
       }
       const keyDown = (event: KeyboardEvent) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -990,7 +986,7 @@ export function ContextGraph3D({
           const info = renderer.info.render
           const painted = info.points + info.lines + info.triangles
           if ((gl.isContextLost?.() ?? false) || painted === 0) {
-            callbacks.current.onUnavailable('WebGL 未产生可绘制内容（headless 或缺少 GPU 加速），已回退 2D')
+            callbacks.current.onUnavailable(t('graph3d.unavailable.noContent'))
           }
         } catch (error) {
           console.warn('[agentos-context] 3D paint probe failed', error)
@@ -1042,7 +1038,7 @@ export function ContextGraph3D({
       console.error('[agentos-context] 3D graph unavailable', error)
       if (!disposed)
         callbacks.current.onUnavailable(
-          '当前设备或远程桌面环境未启用 WebGL',
+          t('graph3d.error.noWebgl'),
         )
     }
     return () => {
@@ -1064,12 +1060,12 @@ export function ContextGraph3D({
   return (
     <div
       className={styles.graph3d}
-      aria-label="三维记忆图谱"
+      aria-label={t('aria.graph3d')}
       data-context-point-cloud
       data-context-graph-layout={layoutMode}
     >
       <div className={styles.graph3dCanvas} ref={host} />
-      <div className={styles.graph3dLegend} aria-label="图谱图例">
+      <div className={styles.graph3dLegend} aria-label={t('aria.graphLegend')}>
         {(['working', 'episodic', 'semantic', 'procedural', 'entity', 'document', 'summary', 'source'] as const)
           .filter(tone => (counts[tone] ?? 0) > 0)
           .map(tone => (
@@ -1080,8 +1076,8 @@ export function ContextGraph3D({
           ))}
       </div>
       <div className={styles.graph3dSummary}>
-        <b>{graph.nodes.length} 个真实节点</b>
-        <span>{graph.edges.length} 条关系 · 所有光点均可点击</span>
+        <b>{t('graph3d.nodes', { count: graph.nodes.length })}</b>
+        <span>{t('graph3d.edges', { count: graph.edges.length })}</span>
       </div>
       {hovered && (
         <div
@@ -1093,19 +1089,19 @@ export function ContextGraph3D({
           <span>{hovered.label}</span>
         </div>
       )}
-      <div className={styles.graph3dControls} role="group" aria-label="三维图谱视角">
+      <div className={styles.graph3dControls} role="group" aria-label={t('aria.graph3dViewport')}>
         <button
           type="button"
-          aria-label="适配全部节点"
-          title="适配全部"
+          aria-label={t('aria.fitAll')}
+          title={t('graph3d.fitAll')}
           onClick={() => cameraActions.current.fitAll()}
         >
           ⛶
         </button>
         <button
           type="button"
-          aria-label="聚焦已选节点和邻居"
-          title="聚焦选择"
+          aria-label={t('aria.focusSelection')}
+          title={t('graph3d.focusSelection')}
           disabled={!selectedNodeId}
           onClick={() => cameraActions.current.fitNodes(highlightedNodeIds)}
         >
@@ -1113,34 +1109,34 @@ export function ContextGraph3D({
         </button>
         <button
           type="button"
-          aria-label="放大三维图谱"
-          title="放大"
+          aria-label={t('aria.zoomIn3d')}
+          title={t('graph3d.zoomIn')}
           onClick={() => cameraActions.current.zoomIn()}
         >
           ＋
         </button>
         <button
           type="button"
-          aria-label="自动旋转三维图谱"
+          aria-label={t('aria.autoRotate')}
           aria-pressed={autoRotate}
-          title={autoRotate ? "暂停自转" : "开始自转"}
+          title={autoRotate ? t('graph3d.pauseRotate') : t('graph3d.startRotate')}
           onClick={() => setAutoRotate(value => !value)}
         >
           {autoRotate ? "❚❚" : "▶"}
         </button>
         <button
           type="button"
-          aria-label="缩小三维图谱"
-          title="缩小"
+          aria-label={t('aria.zoomOut3d')}
+          title={t('graph3d.zoomOut')}
           onClick={() => cameraActions.current.zoomOut()}
         >
           －
         </button>
       </div>
       <div className={styles.graph3dHelp}>
-        拖动旋转 · 滚轮缩放 · 双击聚焦 · Shift 点击查看路径
+        {t('graph3d.hint')}
       </div>
-      <div className={styles.srOnly} aria-label="三维图谱节点">
+      <div className={styles.srOnly} aria-label={t('aria.graph3dNodes')}>
         {graph.nodes.map(node => (
           <button
             type="button"

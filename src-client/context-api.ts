@@ -24,6 +24,7 @@ interface ClientConnectionRpc {
     signal?: AbortSignal,
   ): Promise<ConnectionRpcResult>
 }
+import { t } from './i18n.ts'
 import type {
   ContextBootstrap,
   ContextMemory,
@@ -245,7 +246,7 @@ export function createContextApi(rpc: ClientConnectionRpc): ContextApi {
     write = false,
     timeoutMs = write ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS,
   ): Promise<T> {
-    if (disposed) throw new ContextApiError('DISPOSED', '记忆界面已关闭')
+    if (disposed) throw new ContextApiError('DISPOSED', t('error.disposed'))
     const controller = new AbortController()
     const limit = Math.max(1_000, timeoutMs)
     let timedOut = false
@@ -280,10 +281,7 @@ export function createContextApi(rpc: ClientConnectionRpc): ContextApi {
       return result.value as T
     } catch (error) {
       if (timedOut)
-        throw new ContextApiError(
-          'TIMEOUT',
-          `请求超过 ${Math.round(limit / 1_000)} 秒未响应，已取消；请确认 DSH 主机状态后重试`,
-        )
+        throw new ContextApiError('TIMEOUT', t('error.timeout', { seconds: Math.round(limit / 1_000) }))
       if (controller.signal.aborted)
         throw (
           controller.signal.reason ?? new DOMException('Aborted', 'AbortError')

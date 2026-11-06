@@ -4,6 +4,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ContextApi } from './context-api.ts'
 import type {
   ContextMemory,
+  ContextWarningDetail,
   MemoryLayer,
 } from './context-types.ts'
 import { ContextGraph } from './ContextGraph.tsx'
@@ -26,6 +27,7 @@ import { ContextModal } from './ContextModal.tsx'
 import { ALL_SCOPES_ID, withAllScopes } from './context-all-scopes.ts'
 import styles from './Context.module.css'
 import responsive from './ContextResponsive.module.css'
+import { t, type AgentosContextLocaleKey, type AgentosT } from './i18n.ts'
 type Tab = 'memories' | 'knowledge' | 'graph' | 'review' | 'settings'
 type LifecycleFilter = 'all' | 'active' | 'candidate' | 'expired' | 'retired'
 const MEMORY_LAYERS: MemoryLayer[] = [
@@ -36,13 +38,13 @@ const MEMORY_LAYERS: MemoryLayer[] = [
 ]
 const GLOBAL_SCOPE_ID = 'dsh-default'
 const changeLabel = (action: string) => ({
-  'memory.save': '新增记忆',
-  'memory.revise': '修订记忆',
-  'memory.transition': '调整层级',
-  'memory.reinforce': '强化记忆',
-  'memory.expire': '记忆到期',
-  'memory.retire': '停止召回',
-}[action] ?? '记忆已更新')
+  'memory.save': t('workbench.change.save'),
+  'memory.revise': t('workbench.change.revise'),
+  'memory.transition': t('workbench.change.transition'),
+  'memory.reinforce': t('workbench.change.reinforce'),
+  'memory.expire': t('workbench.change.expire'),
+  'memory.retire': t('workbench.change.retire'),
+}[action] ?? t('workbench.change.generic'))
 const toLocalDateTime = (value: number | null | undefined) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return ''
   const date = new Date(value)
@@ -50,13 +52,39 @@ const toLocalDateTime = (value: number | null | undefined) => {
     .toISOString()
     .slice(0, 16)
 }
-const WORKBENCH_TABS: [Tab, string][] = [
-  ['memories', '记忆'],
-  ['knowledge', '知识库'],
-  ['graph', '图谱'],
-  ['review', '待确认'],
-  ['settings', '设置'],
+const WORKBENCH_TABS: [Tab, AgentosContextLocaleKey][] = [
+  ['memories', 'nav'],
+  ['knowledge', 'workbench.tab.knowledge'],
+  ['graph', 'memoryView.tab.graph'],
+  ['review', 'workbench.tab.review'],
+  ['settings', 'workbench.tab.settings'],
 ]
+
+/** Host warning code -> locale key; unknown codes keep the host message. */
+const WARNING_KEYS: Record<string, AgentosContextLocaleKey> = {
+  LEGACY_READ_FAILED: 'warning.legacyReadFailed',
+  LEGACY_PAGING_UNSUPPORTED: 'warning.legacyPagingUnsupported',
+  LEGACY_SCAN_TRUNCATED: 'warning.legacyScanTruncated',
+}
+
+function warningCopy(
+  t: AgentosT,
+  warnings: string[],
+  details: ContextWarningDetail[] | undefined,
+): { key: string; text: string }[] {
+  // Prefer structured host diagnostics; fall back to the legacy plain strings
+  // when an older host does not send warningDetails.
+  if (details !== undefined && details.length > 0) {
+    return details.map((detail, index) => {
+      const localeKey = WARNING_KEYS[detail.code]
+      return {
+        key: 'warning:' + index,
+        text: localeKey === undefined ? detail.message : t(localeKey, detail.params),
+      }
+    })
+  }
+  return warnings.map((text, index) => ({ key: 'warning:' + index, text }))
+}
 function MemoryManager({
   api,
   scopeId,
@@ -264,7 +292,7 @@ function MemoryManager({
         if (editor === 'merge') {
           const keep = entities.data?.find(x => x.id === subject),
             merge = entities.data?.find(x => x.id === mergeId)
-          if (!keep || !merge) throw new Error('请选择两个对象')
+          if (!keep || !merge) throw new Error(t('workbench.error.chooseTwoEntities'))
           await api.mergeEntities(
             {
               scopeId: writeScopeId,
@@ -280,8 +308,8 @@ function MemoryManager({
       })
       setNotice(
         editor === 'relation'
-          ? '关系已提交到“待确认”，尚未作为事实使用。'
-          : '操作已保存。',
+          ? t('workbench.notice.relationPending')
+          : t('workbench.notice.saved'),
       )
       setEditor(null)
       setSelected(null)
@@ -317,7 +345,7 @@ function MemoryManager({
           signal,
         ),
       )
-      setNotice('已复制到全局记忆，之后可在任意工作区参与召回。')
+      setNotice(t('workbench.notice.copiedToGlobal'))
     } catch (error) {
       if ((error as Error).name !== 'AbortError') setFormError(plainError(error))
     } finally {
@@ -325,13 +353,13 @@ function MemoryManager({
     }
   }
   const title = {
-    save: '记住一条',
-    revise: '修订记忆',
-    transition: '迁移记忆层级',
-    retire: '停止召回',
-    entity: '创建对象',
-    relation: '建立关系',
-    merge: '对齐对象别名',
+    save: t('pane.action.remember'),
+    revise: t('workbench.change.revise'),
+    transition: t('workbench.editor.transition'),
+    retire: t('workbench.change.retire'),
+    entity: t('workbench.editor.entity'),
+    relation: t('workbench.editor.relation'),
+    merge: t('workbench.editor.merge'),
   }[editor ?? 'save']
   const importanceValue = Number(importance)
   const placementValid =
@@ -365,35 +393,35 @@ function MemoryManager({
       )}
       <div className={styles.toolbar}>
         <input
-          aria-label="搜索记忆或对象"
+          aria-label={t('aria.searchMemoryOrEntity')}
           value={query}
           onChange={e => setQuery(e.currentTarget.value)}
-          placeholder="搜索记忆或对象"
+          placeholder={t('aria.searchMemoryOrEntity')}
         />
         <select
-          aria-label="状态筛选"
+          aria-label={t('aria.lifecycleFilter')}
           value={lifecycle}
           onChange={e => setLifecycle(e.currentTarget.value as LifecycleFilter)}
           disabled={mode === 'entities'}
         >
-          <option value="all">全部状态</option>
-          <option value="active">当前有效</option>
-          <option value="candidate">候选</option>
-          <option value="expired">已过期</option>
-          <option value="retired">已停用</option>
+          <option value="all">{t('workbench.filter.allStates')}</option>
+          <option value="active">{t('workbench.filter.active')}</option>
+          <option value="candidate">{t('workbench.filter.candidate')}</option>
+          <option value="expired">{t('workbench.filter.expired')}</option>
+          <option value="retired">{t('workbench.filter.retired')}</option>
         </select>
         <select
-          aria-label="层级筛选"
+          aria-label={t('aria.layerFilter')}
           value={layerFilter}
           onChange={e =>
             setLayerFilter(e.currentTarget.value as 'all' | MemoryLayer)
           }
           disabled={mode === 'entities'}
         >
-          <option value="all">全部层级</option>
+          <option value="all">{t('workbench.filter.allLayers')}</option>
           {MEMORY_LAYERS.map(value => (
             <option value={value} key={value}>
-              {memoryLayerLabel[value]}记忆
+              {t('workbench.layerMemory', { layer: memoryLayerLabel[value] })}
             </option>
           ))}
         </select>
@@ -402,7 +430,7 @@ function MemoryManager({
           variant={mode === 'memories' ? 'primary' : 'outline'}
           onClick={() => setMode('memories')}
         >
-          记忆
+          {t('nav')}
         </Button>
         {allowEntityEditing && (
           <Button
@@ -410,7 +438,7 @@ function MemoryManager({
             variant={mode === 'entities' ? 'primary' : 'outline'}
             onClick={() => setMode('entities')}
           >
-            对象
+            {t('workbench.mode.entities')}
           </Button>
         )}
         <Button
@@ -418,7 +446,7 @@ function MemoryManager({
           variant="outline"
           onClick={() => open(mode === 'memories' ? 'save' : 'entity')}
         >
-          {mode === 'memories' ? (writeScopeId === GLOBAL_SCOPE_ID ? '记住到全局' : '记住一条') : '创建对象'}
+          {mode === 'memories' ? (writeScopeId === GLOBAL_SCOPE_ID ? t('workbench.action.rememberGlobal') : t('pane.action.remember')) : t('workbench.editor.entity')}
         </Button>
         {mode === 'entities' && (
           <>
@@ -427,26 +455,26 @@ function MemoryManager({
               variant="outline"
               onClick={() => open('relation')}
             >
-              建立关系
+              {t('workbench.editor.relation')}
             </Button>
             <Button size="sm" variant="outline" onClick={() => open('merge')}>
-              对齐别名
+              {t('workbench.action.mergeAliases')}
             </Button>
           </>
         )}
       </div>
       {mode === 'memories' ? (
         <div className={styles.memoryLayout}>
-          <section className={styles.memoryList} aria-label="记忆列表">
+          <section className={styles.memoryList} aria-label={t('aria.memoryList')}>
             {memories.phase === 'loading' && !memories.data ? (
-              <div className={styles.loading}>正在读取记忆…</div>
+              <div className={styles.loading}>{t('workbench.loading.memories')}</div>
             ) : memories.error && !memories.data ? (
               <div className={styles.error} role="alert">
                 {memories.error}
-                <Button onClick={memories.reload}>重试</Button>
+                <Button onClick={memories.reload}>{t('common.retry')}</Button>
               </div>
             ) : !memories.data?.length ? (
-              <div className={styles.empty}>当前筛选下没有记忆。</div>
+              <div className={styles.empty}>{t('workbench.empty.memories')}</div>
             ) : (
               memories.data.map(m => (
                 <button
@@ -460,10 +488,10 @@ function MemoryManager({
                       {memoryKindLabel[m.kind] ?? m.kind}
                     </Tag>
                     <Tag tone={m.layer === 'working' ? 'warning' : 'info'}>
-                      {memoryLayerLabel[m.layer ?? 'semantic']}记忆
+                      {t('workbench.layerMemory', { layer: memoryLayerLabel[m.layer ?? 'semantic'] })}
                     </Tag>
                     <Tag tone="outline">
-                      重要度 {Math.round((m.importance ?? 0.5) * 100)}%
+                      {t('workbench.importance', { percent: Math.round((m.importance ?? 0.5) * 100) })}
                     </Tag>
                     <Tag
                       tone={
@@ -476,11 +504,11 @@ function MemoryManager({
                     >
                       {epistemicLabel[m.epistemic] ?? m.epistemic}
                     </Tag>
-                    {m.legacy && <Tag tone="info">旧记忆</Tag>}
+                    {m.legacy && <Tag tone="info">{t('memoryView.detail.legacy')}</Tag>}
                     <Tag tone={m.lifecycle === 'active' ? 'success' : m.lifecycle === 'candidate' ? 'warning' : 'neutral'}>
-                      {m.lifecycle === 'active' ? '有效' : m.lifecycle === 'candidate' ? '候选' : m.expiresAt !== null && m.expiresAt <= Date.now() ? '已过期' : '已停用'}
+                      {m.lifecycle === 'active' ? t('workbench.lifecycle.active') : m.lifecycle === 'candidate' ? t('workbench.filter.candidate') : m.expiresAt !== null && m.expiresAt <= Date.now() ? t('workbench.filter.expired') : t('workbench.filter.retired')}
                     </Tag>
-                    <Tag tone="outline">{m.source.actorRole === 'assistant' ? '自动提炼' : m.source.actorRole === 'human' ? '用户内容' : sourceLabel(m)}</Tag>
+                    <Tag tone="outline">{m.source.actorRole === 'assistant' ? t('memoryView.capture.autoDistilled') : m.source.actorRole === 'human' ? t('workbench.source.userContent') : sourceLabel(m)}</Tag>
                     <span className={styles.meta}>
                       {formatTime(m.recordedAt)}
                     </span>
@@ -490,13 +518,13 @@ function MemoryManager({
             )}
           </section>
           {selected && !editor && (
-            <aside className={styles.panel + ' ' + styles.detailDialog} role="dialog" aria-modal="true" aria-label="记忆详情">
+            <aside className={styles.panel + ' ' + styles.detailDialog} role="dialog" aria-modal="true" aria-label={t('memoryView.detail.title')}>
               <div className={styles.stack}>
                 <div className={styles.between}>
-                  <h3 className={styles.sectionTitle}>记忆详情</h3>
+                  <h3 className={styles.sectionTitle}>{t('memoryView.detail.title')}</h3>
                   <div className={styles.actions}>
                     <Tag tone={selected.lifecycle === 'retired' ? 'neutral' : 'info'}>v{selected.revision}</Tag>
-                    <Button size="sm" variant="ghost" onClick={() => setSelected(null)} aria-label="关闭记忆详情">关闭</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setSelected(null)} aria-label={t('aria.closeMemoryDetail')}>{t('common.close')}</Button>
                   </div>
                 </div>
                 <p>{selected.content}</p>
@@ -509,19 +537,19 @@ function MemoryManager({
                 <div className={styles.meta}>
                   ID：{selected.id}
                   <br />
-                  范围：{formatScopeLabel(selected.scopeId, selected.scopeId)}
+                  {t('workbench.detail.scope', { scope: formatScopeLabel(selected.scopeId, selected.scopeId) })}
                   <br />
-                  层级：{memoryLayerLabel[selected.layer ?? 'semantic']}
-                  （重要度 {Math.round((selected.importance ?? 0.5) * 100)}%）
+                  {t('workbench.detail.layer', { layer: memoryLayerLabel[selected.layer ?? 'semantic'] })}
+                  {t('workbench.detail.importance', { percent: Math.round((selected.importance ?? 0.5) * 100) })}
                   <br />
-                  到期：
+                  {t('workbench.detail.expires')}
                   {selected.expiresAt === null
-                    ? '长期保留'
+                    ? t('workbench.detail.longTerm')
                     : formatTime(selected.expiresAt)}
                   <br />
-                  生效：
+                  {t('workbench.detail.effective')}
                   {selected.validFrom === null
-                    ? '未知'
+                    ? t('common.unknown')
                     : formatTime(selected.validFrom)}
                 </div>
                 <div className={styles.actions}>
@@ -532,7 +560,7 @@ function MemoryManager({
                       disabled={busy}
                       onClick={() => void copySelectedToGlobal()}
                     >
-                      复制到全局
+                      {t('workbench.action.copyToGlobal')}
                     </Button>
                   )}
                   <Button
@@ -540,7 +568,7 @@ function MemoryManager({
                     variant="outline"
                     onClick={() => open('revise')}
                   >
-                    修订
+                    {t('workbench.action.revise')}
                   </Button>
                   <Button
                     size="sm"
@@ -548,7 +576,7 @@ function MemoryManager({
                     disabled={selected.lifecycle === 'retired'}
                     onClick={() => open('transition')}
                   >
-                    迁移层级
+                    {t('workbench.action.transitionLayer')}
                   </Button>
                   <Button
                     size="sm"
@@ -556,18 +584,18 @@ function MemoryManager({
                     disabled={selected.lifecycle === 'retired'}
                     onClick={() => open('retire')}
                   >
-                    停止召回
+                    {t('workbench.change.retire')}
                   </Button>
                 </div>
                 <div>
-                  <h3 className={styles.sectionTitle}>版本</h3>
+                  <h3 className={styles.sectionTitle}>{t('memoryView.detail.version')}</h3>
                   {versions.phase === 'loading' && (
-                    <div className={styles.loading}>正在读取版本…</div>
+                    <div className={styles.loading}>{t('workbench.loading.versions')}</div>
                   )}
                   {versions.error && (
                     <div className={styles.error} role="alert">
-                      版本暂不可用：{versions.error}
-                      <Button onClick={versions.reload}>重试</Button>
+                      {t('workbench.versionsUnavailable', { error: versions.error })}
+                      <Button onClick={versions.reload}>{t('common.retry')}</Button>
                     </div>
                   )}
                   {versions.data?.map(v => (
@@ -575,7 +603,7 @@ function MemoryManager({
                       <b>v{v.revision}</b> · {formatTime(v.recordedAt)}
                       <div className={styles.snapshot}>{v.content}</div>
                       <div className={styles.meta}>
-                        {memoryLayerLabel[v.layer ?? 'semantic']}记忆 · 重要度
+                        {t('workbench.versionLine', { layer: memoryLayerLabel[v.layer ?? 'semantic'] })}
                         {Math.round((v.importance ?? 0.5) * 100)}% · {sourceLabel(v)} · {v.source.kind}
                       </div>
                     </div>
@@ -588,15 +616,15 @@ function MemoryManager({
       ) : (
         <div className={styles.list}>
           {entities.phase === 'loading' && !entities.data ? (
-            <div className={styles.loading}>正在读取对象…</div>
+            <div className={styles.loading}>{t('workbench.loading.entities')}</div>
           ) : entities.error ? (
             <div className={styles.error} role="alert">
               {entities.error}
-              <Button onClick={entities.reload}>重试</Button>
+              <Button onClick={entities.reload}>{t('common.retry')}</Button>
             </div>
           ) : !entities.data?.length ? (
             <div className={styles.empty}>
-              还没有对象。创建项目、需求、接口等对象后，可以建立有来源的关系。
+              {t('workbench.empty.entities')}
             </div>
           ) : (
             entities.data.map(e => (
@@ -626,12 +654,12 @@ function MemoryManager({
         title={title}
         description={
           editor === 'relation'
-            ? '关系先进入待确认；必须引用一条记忆中的原文。'
+            ? t('workbench.hint.relation')
             : editor === 'merge'
-              ? '仅同类型对象可对齐，历史身份与证据保留。'
-              : '更改会记录新版本，不覆盖历史。'
+              ? t('workbench.hint.merge')
+              : t('workbench.hint.revise')
         }
-        closeLabel="关闭"
+        closeLabel={t('common.close')}
         footer={
           <div className={styles.actions}>
             <Button
@@ -639,14 +667,14 @@ function MemoryManager({
               disabled={busy}
               onClick={() => setEditor(null)}
             >
-              取消
+              {t('common.cancel')}
             </Button>
             <Button
               variant="primary"
               disabled={busy || !canSubmit}
               onClick={() => void perform()}
             >
-              {busy ? '保存中…' : '确认'}
+              {busy ? t('common.saving') : t('common.confirm')}
             </Button>
           </div>
         }
@@ -655,7 +683,7 @@ function MemoryManager({
           {(editor === 'save' || editor === 'revise') && (
             <>
               <div className={styles.field}>
-                <label>类型</label>
+                <label>{t('workbench.field.type')}</label>
                 <select
                   value={kind}
                   onChange={e => setKind(e.currentTarget.value)}
@@ -668,7 +696,7 @@ function MemoryManager({
                 </select>
               </div>
               <div className={styles.field}>
-                <label>内容</label>
+                <label>{t('pane.field.content')}</label>
                 <textarea
                   value={content}
                   onChange={e => setContent(e.currentTarget.value)}
@@ -681,9 +709,9 @@ function MemoryManager({
             editor === 'transition') && (
             <>
               <div className={styles.field}>
-                <label>记忆层级</label>
+                <label>{t('workbench.field.layer')}</label>
                 <select
-                  aria-label="记忆层级"
+                  aria-label={t('workbench.field.layer')}
                   value={layer}
                   onChange={(e) => {
                     setLayer(e.currentTarget.value as MemoryLayer)
@@ -692,14 +720,14 @@ function MemoryManager({
                 >
                   {MEMORY_LAYERS.map(value => (
                     <option value={value} key={value}>
-                      {memoryLayerLabel[value]}记忆
+                      {t('workbench.layerMemory', { layer: memoryLayerLabel[value] })}
                     </option>
                   ))}
                 </select>
               </div>
               <div className={styles.field}>
                 <label htmlFor="context-memory-importance">
-                  重要度（0–1）
+                  {t('workbench.field.importance')}
                 </label>
                 <input
                   id="context-memory-importance"
@@ -712,7 +740,7 @@ function MemoryManager({
                 />
               </div>
               <div className={styles.field}>
-                <label htmlFor="context-memory-expires">到期时间（可选）</label>
+                <label htmlFor="context-memory-expires">{t('workbench.field.expiresAt')}</label>
                 <input
                   id="context-memory-expires"
                   type="datetime-local"
@@ -720,7 +748,7 @@ function MemoryManager({
                   onChange={e => setExpiresAt(e.currentTarget.value)}
                 />
                 <span className={styles.hint}>
-                  留空时，工作和情节记忆使用系统保留策略；语义和程序记忆长期保留。
+                  {t('workbench.field.expiresHint')}
                 </span>
               </div>
             </>
@@ -728,7 +756,7 @@ function MemoryManager({
           {editor === 'entity' && (
             <>
               <div className={styles.field}>
-                <label>对象类型</label>
+                <label>{t('workbench.field.entityType')}</label>
                 <select
                   value={entityType}
                   onChange={e => setEntityType(e.currentTarget.value)}
@@ -741,14 +769,14 @@ function MemoryManager({
                 </select>
               </div>
               <div className={styles.field}>
-                <label>名称</label>
+                <label>{t('workbench.field.name')}</label>
                 <input
                   value={content}
                   onChange={e => setContent(e.currentTarget.value)}
                 />
               </div>
               <div className={styles.field}>
-                <label>别名（逗号分隔）</label>
+                <label>{t('workbench.field.aliases')}</label>
                 <input
                   value={aliases}
                   onChange={e => setAliases(e.currentTarget.value)}
@@ -759,12 +787,12 @@ function MemoryManager({
           {editor === 'relation' && (
             <>
               <div className={styles.field}>
-                <label>主语对象</label>
+                <label>{t('workbench.field.subject')}</label>
                 <select
                   value={subject}
                   onChange={e => setSubject(e.currentTarget.value)}
                 >
-                  <option value="">请选择</option>
+                  <option value="">{t('workbench.field.choose')}</option>
                   {entities.data?.map(e => (
                     <option value={e.id} key={e.id}>
                       {e.name} · {e.type}
@@ -773,7 +801,7 @@ function MemoryManager({
                 </select>
               </div>
               <div className={styles.field}>
-                <label>关系</label>
+                <label>{t('workbench.field.relation')}</label>
                 <select
                   value={predicate}
                   onChange={e => setPredicate(e.currentTarget.value)}
@@ -786,12 +814,12 @@ function MemoryManager({
                 </select>
               </div>
               <div className={styles.field}>
-                <label>宾语对象</label>
+                <label>{t('workbench.field.object')}</label>
                 <select
                   value={object}
                   onChange={e => setObject(e.currentTarget.value)}
                 >
-                  <option value="">请选择</option>
+                  <option value="">{t('workbench.field.choose')}</option>
                   {entities.data?.map(e => (
                     <option value={e.id} key={e.id}>
                       {e.name} · {e.type}
@@ -800,12 +828,12 @@ function MemoryManager({
                 </select>
               </div>
               <div className={styles.field}>
-                <label>来源记忆</label>
+                <label>{t('workbench.field.sourceMemory')}</label>
                 <select
                   value={sourceMemoryId}
                   onChange={e => setSourceMemoryId(e.currentTarget.value)}
                 >
-                  <option value="">请选择</option>
+                  <option value="">{t('workbench.field.choose')}</option>
                   {memories.data?.map(m => (
                     <option value={m.id} key={m.id}>
                       {m.content.slice(0, 60)}
@@ -814,11 +842,11 @@ function MemoryManager({
                 </select>
               </div>
               <div className={styles.field}>
-                <label>原文片段</label>
+                <label>{t('workbench.field.quote')}</label>
                 <textarea
                   value={quote}
                   onChange={e => setQuote(e.currentTarget.value)}
-                  placeholder="必须与来源中的文字完全一致"
+                  placeholder={t('workbench.field.quotePlaceholder')}
                 />
               </div>
             </>
@@ -826,12 +854,12 @@ function MemoryManager({
           {editor === 'merge' && (
             <>
               <div className={styles.field}>
-                <label>保留对象</label>
+                <label>{t('workbench.field.keepEntity')}</label>
                 <select
                   value={subject}
                   onChange={e => setSubject(e.currentTarget.value)}
                 >
-                  <option value="">请选择</option>
+                  <option value="">{t('workbench.field.choose')}</option>
                   {entities.data?.map(e => (
                     <option value={e.id} key={e.id}>
                       {e.name} · {e.type}
@@ -840,12 +868,12 @@ function MemoryManager({
                 </select>
               </div>
               <div className={styles.field}>
-                <label>并入对象</label>
+                <label>{t('workbench.field.mergeEntity')}</label>
                 <select
                   value={mergeId}
                   onChange={e => setMergeId(e.currentTarget.value)}
                 >
-                  <option value="">请选择</option>
+                  <option value="">{t('workbench.field.choose')}</option>
                   {entities.data?.map(e => (
                     <option value={e.id} key={e.id}>
                       {e.name} · {e.type}
@@ -859,7 +887,7 @@ function MemoryManager({
             editor ?? '',
           ) && (
             <div className={styles.field}>
-              <label>理由</label>
+              <label>{t('workbench.field.reason')}</label>
               <textarea
                 value={reason}
                 onChange={e => setReason(e.currentTarget.value)}
@@ -903,7 +931,7 @@ export function ContextWorkbench({
   const allScope = useMemo(
     () => ({
       id: ALL_SCOPES_ID,
-      label: '全部范围',
+      label: t('scope.all'),
       count: orderedScopes.reduce((total, item) => total + item.count, 0),
       knowledgeCount: orderedScopes.reduce((total, item) => total + (item.knowledgeCount ?? 0), 0),
     }),
@@ -953,65 +981,65 @@ export function ContextWorkbench({
   return (
     <section
       className={`${styles.root} ${responsive.root} ${surface === 'conversation' ? styles.conversationSurface : ''}`}
-      aria-label="agentOS context 记忆工作台"
+      aria-label={t('aria.workbench')}
       data-context-surface={surface}
     >
       <header className={styles.header}>
         <div className={styles.titleRow + ' ' + responsive.headerRow}>
           <div>
-            <h1 className={styles.title + ' ' + responsive.title}>记忆</h1>
-            <p className={styles.subtitle}>跨会话记忆、知识库与关系图谱</p>
+            <h1 className={styles.title + ' ' + responsive.title}>{t('nav')}</h1>
+            <p className={styles.subtitle}>{t('workbench.subtitle')}</p>
           </div>
           <div className={styles.actions + ' ' + responsive.headerActions}>
             {orderedScopes.length ? (
               <select
                 className={styles.scope + ' ' + responsive.scope}
-                aria-label="记忆范围"
+                aria-label={t('aria.memoryScope')}
                 value={scopeId}
                 onChange={e => setScopeId(e.currentTarget.value)}
               >
                 {displayedScopes.map(s => (
                   <option value={s.id} key={s.id}>
-                    {formatScopeLabel(s.id, s.label)} · {s.count} 条记忆{s.knowledgeCount ? ` · ${s.knowledgeCount} 篇知识` : ''}
+                    {t('workbench.scopeOption', { scope: formatScopeLabel(s.id, s.label), count: s.count, knowledge: s.knowledgeCount ? t('workbench.scopeKnowledge', { count: s.knowledgeCount }) : '' })}
                   </option>
                 ))}
               </select>
             ) : null}
             <Button variant="toolbar" size="sm" onClick={onClose}>
-              {surface === 'conversation' ? '返回对话' : '关闭'}
+              {surface === 'conversation' ? t('memoryView.backToChat') : t('common.close')}
             </Button>
           </div>
         </div>
         {selectedScope && (
           <div className={styles.scopeSummary}>
-            <div className={styles.memoryActivity} aria-label="自动记忆状态">
+            <div className={styles.memoryActivity} aria-label={t('aria.autoMemoryStatus')}>
               <span className={boot.data?.features.capture ? styles.activityDotOn : styles.activityDotOff}/>
-              <b>{boot.data?.features.capture ? '自动记忆已开启' : '自动记忆已关闭'}</b>
+              <b>{boot.data?.features.capture ? t('workbench.captureOn') : t('workbench.captureOff')}</b>
               {latestMemoryChange
-                ? <span>最近：{changeLabel(latestMemoryChange.action)} · {formatTime(latestMemoryChange.at)}</span>
-                : <span>当前范围还没有新的写入记录</span>}
+                ? <span>{t('workbench.recentChange', { label: changeLabel(latestMemoryChange.action), time: formatTime(latestMemoryChange.at) })}</span>
+                : <span>{t('workbench.noRecentChange')}</span>}
             </div>
             <span>
-              正在显示“{formatScopeLabel(selectedScope.id, selectedScope.label)}”中的 {selectedScope.count} 条记录
+              {t('workbench.viewingScope', { scope: formatScopeLabel(selectedScope.id, selectedScope.label), count: selectedScope.count })}
             </span>
             <span>
               {selectedScope.id === ALL_SCOPES_ID
-                ? '这里汇总显示旧 OpenContext 与所有工作区的新记忆；自动捕获仍写入当前工作区。'
+                ? t('workbench.summary.allScopes')
                 : selectedScope.id === boot.data?.globalScope
-                  ? '全局记忆可在任意工作区参与自动召回；自动捕获仍默认保存在当前工作区。'
+                  ? t('workbench.summary.globalScope')
                   : (boot.data?.recallOrder?.length ?? (boot.data?.globalScope ? 2 : 1)) > 1
-                    ? (boot.data?.recallOrder ? '回答时会按本次会话、Agent、工作区、用户、应用、全局的可用范围联合检索。' : '回答时会联合检索当前工作区与全局记忆。')
-                    : '当前配置固定为单一记忆范围。'}
+                    ? (boot.data?.recallOrder ? t('workbench.summary.recallOrder') : t('workbench.summary.recallBoth'))
+                    : t('workbench.summary.singleScope')}
             </span>
             {sessionScope && sessionScope.id !== selectedScope.id && (
               <button type="button" className={styles.scopeAction} onClick={() => setScopeId(sessionScope.id)}>
-                切换到当前对话范围（{sessionScope.count}）
+                {t('workbench.switchToSessionScope', { count: sessionScope.count })}
               </button>
             )}
           </div>
         )}
         <nav className={styles.tabs} role="tablist">
-          {WORKBENCH_TABS.map(([id, label], index) => (
+          {WORKBENCH_TABS.map(([id, labelKey], index) => (
             <button
               id={'agentos-context-tab-' + id}
               aria-controls={'agentos-context-panel-' + id}
@@ -1044,7 +1072,7 @@ export function ContextWorkbench({
                 )
               }}
             >
-              {label}
+              {t(labelKey)}
             </button>
           ))}
         </nav>
@@ -1056,19 +1084,19 @@ export function ContextWorkbench({
         className={styles.body}
       >
         {boot.phase === 'loading' && !boot.data ? (
-          <div className={styles.loading}>正在读取 agentOS context…</div>
+          <div className={styles.loading}>{t('workbench.loading.root')}</div>
         ) : boot.error && !boot.data ? (
           <div className={styles.error} role="alert">
             {boot.error}
-            <Button onClick={boot.reload}>重试</Button>
+            <Button onClick={boot.reload}>{t('common.retry')}</Button>
           </div>
         ) : !boot.data || !scopeId ? (
-          <div className={styles.empty}>没有可用的记忆范围。</div>
+          <div className={styles.empty}>{t('workbench.empty.scopes')}</div>
         ) : (
           <>
-            {boot.data.warnings.map(x => (
-              <div className={styles.notice} key={x}>
-                {x}
+            {warningCopy(t, boot.data.warnings, boot.data.warningDetails).map(item => (
+              <div className={styles.notice} key={item.key}>
+                {item.text}
               </div>
             ))}
             {tab === 'memories' && (

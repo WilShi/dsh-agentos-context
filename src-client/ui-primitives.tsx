@@ -17,6 +17,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react'
+import { t } from './i18n.ts'
 
 let styleInstalled = false
 
@@ -211,7 +212,7 @@ export function Modal({
   footer,
   className,
   contentClassName,
-  closeLabel = '关闭',
+  closeLabel = t('common.close'),
   headless = false,
   shortcutModal,
   backdropBlur = true,

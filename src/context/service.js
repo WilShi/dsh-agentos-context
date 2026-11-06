@@ -140,6 +140,13 @@ function graphSubset(graph,rootId,depth,limit){
 }
 export function createContextService({store,legacy,config={},defaultScope=()=>config.scopeId||'local:'+process.cwd(),sessions,vectorIndex}){
  let legacyWarning=null,legacyScanWarning=null;
+ // Backwards-compatible diagnostics: the legacy plain `warnings` strings stay
+ // for older clients, while `warningDetails` carries a stable code (+ optional
+ // params) so localized clients can render the same condition in their locale
+ // instead of echoing Chinese host text.
+ const warningDetails=new Map();
+ const setWarningDetail=(code,message,params)=>{warningDetails.set(code,{code,message,...(params===undefined?{}:{params})});};
+ const clearWarningDetail=code=>{warningDetails.delete(code);};
  function scope(input){const value=safeScope(input?.scopeId||defaultScope());if(config.scopeId&&value!==config.scopeId)throw fail('NOT_FOUND','没有可访问的记录');return value;}
  // Expiry maintenance is a write; throttle it so read paths (list/search/graph)
  // do not open a write transaction on every call (HOST-REVIEW M10).
@@ -154,22 +161,22 @@ export function createContextService({store,legacy,config={},defaultScope=()=>co
  }
  async function legacyRead(method,input,opts){
   throwIfAborted(opts);
-  try{const rows=await legacy?.[method]?.(input,opts);throwIfAborted(opts);legacyWarning=null;return Array.isArray(rows)?rows:[];}
-  catch(error){if(error?.code==='ABORTED')throw error;legacyWarning='旧记忆暂不可读，当前只显示可用的新记忆；未更改旧数据库。';return [];}
+  try{const rows=await legacy?.[method]?.(input,opts);throwIfAborted(opts);legacyWarning=null;clearWarningDetail('LEGACY_READ_FAILED');return Array.isArray(rows)?rows:[];}
+  catch(error){if(error?.code==='ABORTED')throw error;legacyWarning='旧记忆暂不可读，当前只显示可用的新记忆；未更改旧数据库。';setWarningDetail('LEGACY_READ_FAILED',legacyWarning);return [];}
  }
  async function legacyListPages(input,opts,{cap=LEGACY_SCOPE_SCAN_LIMIT,reportPaging=false}={}){
   const rows=[],seen=new Set();let offset=0;
-  if(reportPaging)legacyScanWarning=null;
+  if(reportPaging){legacyScanWarning=null;clearWarningDetail('LEGACY_PAGING_UNSUPPORTED');clearWarningDetail('LEGACY_SCAN_TRUNCATED');}
   while(rows.length<cap){
    const page=await legacyRead('list',{...input,limit:LEGACY_PAGE_SIZE,offset},opts);if(!page.length)break;
    let added=0;for(const row of page){const key=typeof row?.id==='string'?scopeOf(row)+'\0'+row.id:null;if(!key||seen.has(key))continue;seen.add(key);rows.push(row);added++;if(rows.length>=cap)break;}
    if(page.length<LEGACY_PAGE_SIZE)break;
    // Older backends silently ignore offset. Stop rather than looping forever,
    // and surface an explicit warning in the workbench bootstrap response.
-   if(added===0){if(reportPaging)legacyScanWarning='旧记忆后端不支持分页，范围列表可能不完整。';break;}
+   if(added===0){if(reportPaging){legacyScanWarning='旧记忆后端不支持分页，范围列表可能不完整。';setWarningDetail('LEGACY_PAGING_UNSUPPORTED',legacyScanWarning);}break;}
    offset+=page.length;
   }
-  if(rows.length>=cap&&reportPaging)legacyScanWarning=`旧记忆超过 ${cap} 条，范围统计已截断。`;
+  if(rows.length>=cap&&reportPaging){legacyScanWarning=`旧记忆超过 ${cap} 条，范围统计已截断。`;setWarningDetail('LEGACY_SCAN_TRUNCATED',legacyScanWarning,{cap});}
   return rows;
  }
  async function scanLegacy(opts){return legacyListPages({},opts,{cap:LEGACY_SCOPE_SCAN_LIMIT,reportPaging:true});}
@@ -482,6 +489,7 @@ async function uploadDocument(input,opts){return withUploadSlot(()=>uploadDocume
  }
   const service={store,scope,getMemory,listMemories,saveMemory,reviseMemory,transitionMemory,reinforceMemory,retireMemory,search,maintain,
   warnings:()=>[legacyWarning,legacyScanWarning].filter(Boolean),
+  warningDetails:()=>[...warningDetails.values()],
    async listScopes(){const map=new Map(store.listScopes().map(x=>[x.id,{...x}]));const fallback=safeScope(defaultScope());if(!map.has(fallback))map.set(fallback,{id:fallback,label:fallback,count:0});if(!config.scopeId&&!map.has(GLOBAL_SCOPE_ID))map.set(GLOBAL_SCOPE_ID,{id:GLOBAL_SCOPE_ID,label:'全局记忆',count:0});for(const row of await scanLegacy()){const id=scopeOf(row);if(config.scopeId&&id!==config.scopeId)continue;if(typeof row.id==='string'&&store.getMemory(id,row.id))continue;const current=map.get(id)??{id,label:id==='legacy:unknown'?'旧记忆（范围未记录）':id===GLOBAL_SCOPE_ID?'全局记忆':id,count:0};current.count++;map.set(id,current);}if(typeof legacy?.listKnowledgeScopes==='function'){try{for(const row of await legacy.listKnowledgeScopes({},{})){if(!row||typeof row.id!=='string'||!row.id||(config.scopeId&&row.id!==config.scopeId))continue;const current=map.get(row.id)??{id:row.id,label:row.id,count:0};current.knowledgeCount=Number.isSafeInteger(row.count)?row.count:0;current.knowledgeChunks=Number.isSafeInteger(row.chunks)?row.chunks:0;map.set(row.id,current);}}catch(error){warnKnowledge('scopes',error);}}const global=map.get(GLOBAL_SCOPE_ID);if(global)global.label='全局记忆';return [...map.values()];},
    async compatibilityWorkspaceScopes(scopeId){
     if(config.scopeId)return[];
@@ -498,7 +506,7 @@ async function uploadDocument(input,opts){return withUploadSlot(()=>uploadDocume
     const scopes=[...map.values()];maintain(activeScope);
     const baseRecall=identity?.recallScopeIds??[activeScope,...(config.scopeId?[]:[GLOBAL_SCOPE_ID])],compatibility=await service.compatibilityWorkspaceScopes(activeScope),recallOrder=[];
     for(const id of baseRecall){recallOrder.push(id);if(id===activeScope)recallOrder.push(...compatibility);}
-    return {displayName:'agentOS context',scopes,defaultScope:activeScope,sessionScope,globalScope:config.scopeId?null:GLOBAL_SCOPE_ID,currentScopes,recallOrder:[...new Set(recallOrder)],compatibilityScopes:compatibility,features:{ontology:config.ontologyEnabled!==false,recall:config.recallEnabled!==false,capture:!!config.capturePrompts},memoryLayers:['working','episodic','semantic','procedural'],legacyScopeScanLimit:LEGACY_SCOPE_SCAN_LIMIT,warnings:service.warnings()};
+    return {displayName:'agentOS context',scopes,defaultScope:activeScope,sessionScope,globalScope:config.scopeId?null:GLOBAL_SCOPE_ID,currentScopes,recallOrder:[...new Set(recallOrder)],compatibilityScopes:compatibility,features:{ontology:config.ontologyEnabled!==false,recall:config.recallEnabled!==false,capture:!!config.capturePrompts},memoryLayers:['working','episodic','semantic','procedural'],legacyScopeScanLimit:LEGACY_SCOPE_SCAN_LIMIT,warnings:service.warnings(),warningDetails:service.warningDetails()};
    },
   async versions(input){const scopeId=scope(input);if(store.getMemory(scopeId,input.id))return store.versions(scopeId,input.id);const old=await legacyGet(scopeId,input.id);return old?[old]:[];},
   listEntities:input=>store.listEntities({...input,scopeId:scope(input)}),

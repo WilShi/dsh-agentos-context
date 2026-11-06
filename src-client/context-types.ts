@@ -177,7 +177,26 @@ export interface ContextBootstrap {
   features: { ontology: boolean; recall: boolean; capture: boolean }
   memoryLayers: MemoryLayer[]
   legacyScopeScanLimit: number
+  /** Legacy plain-text diagnostics; kept for hosts older than warningDetails. */
   warnings: string[]
+  /**
+   * Structured form of the same diagnostics. Clients prefer this (stable code +
+   * params, localizable) and fall back to `warnings` when a host omits it.
+   */
+  warningDetails?: ContextWarningDetail[]
+}
+
+/** Stable codes carried by {@link ContextBootstrap.warningDetails}. */
+export type ContextWarningCode =
+  | 'LEGACY_READ_FAILED'
+  | 'LEGACY_PAGING_UNSUPPORTED'
+  | 'LEGACY_SCAN_TRUNCATED'
+
+/** One host-side diagnostic in machine-readable form. */
+export interface ContextWarningDetail {
+  code: ContextWarningCode | string
+  message: string
+  params?: Record<string, unknown>
 }
 
 export interface ContextChange { id: string; action: string; targetId: string; reason?: string; at: number; revision?: number }

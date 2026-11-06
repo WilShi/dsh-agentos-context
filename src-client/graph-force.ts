@@ -203,6 +203,10 @@ export interface ForceLayoutOptions {
   animate?: boolean
   /** 仅在 2D 节点视图启用；关闭时不做任何模拟（3D/社区聚合视图不需要力导向）。 */
   enabled?: boolean
+  /** 每帧回调：用于把节点位置直接写到 DOM，避免逐帧 React setState。 */
+  onFrame?: (positions: Map<string, ForcePoint>, progress: number) => void
+  /** 收敛结束/拖拽结束回调：React 在此一次性提交最终 positions。 */
+  onSettle?: (positions: Map<string, ForcePoint>) => void
 }
 
 export interface ForceLayoutResult {
@@ -235,6 +239,10 @@ export function useForceLayout(
   }, [signature])
   const [positions, setPositions] = useState<Map<string, ForcePoint>>(() => initialPositions)
   const [settled, setSettled] = useState(false)
+  const onFrameRef = useRef(options.onFrame)
+  onFrameRef.current = options.onFrame
+  const onSettleRef = useRef(options.onSettle)
+  onSettleRef.current = options.onSettle
 
   useEffect(() => {
     if (!enabled) {
@@ -245,17 +253,29 @@ export function useForceLayout(
     }
     const simulation = buildSimulation(nodes, edges, radiusOf)
     simulationRef.current = simulation
-    const publish = () => {
+    const snapshot = () => {
       const next = new Map<string, ForcePoint>()
       for (const node of simulation) next.set(node.id, { x: node.x, y: node.y })
-      setPositions(next)
+      return next
     }
-    publish()
+    const emit = (progress: number) => {
+      const next = snapshot()
+      if (onFrameRef.current) onFrameRef.current(next, progress)
+      else setPositions(next)
+    }
+    const commit = () => {
+      const next = snapshot()
+      setPositions(next)
+      setSettled(true)
+      onSettleRef.current?.(next)
+    }
+    const initial = snapshot()
+    setPositions(initial)
     setSettled(false)
+    if (onFrameRef.current) onFrameRef.current(initial, 0)
     if (!animate) {
       for (let step = 0; step < 120; step += 1) simulation.tick()
-      publish()
-      setSettled(true)
+      commit()
       return () => { simulationRef.current = null }
     }
     let frame = 0
@@ -265,9 +285,12 @@ export function useForceLayout(
       const ticks = frame < 12 ? 3 : 2
       for (let index = 0; index < ticks; index += 1) simulation.tick()
       alpha *= 0.94
-      publish()
+      emit(Math.min(1, frame / 90))
       if (frame < 90 && alpha > 0.02) frameRef.current = requestAnimationFrame(step)
-      else setSettled(true)
+      else {
+        frameRef.current = null
+        commit()
+      }
     }
     frameRef.current = requestAnimationFrame(step)
     return () => {
@@ -284,21 +307,31 @@ export function useForceLayout(
     dragTo: (id, point) => {
       if (!enabled) return
       const simulation = simulationRef.current
-      const node = simulation?.nodeById.get(id)
+      if (!simulation) return
+      const node = simulation.nodeById.get(id)
       if (!node) return
       node.fixed = true
       node.x = point.x
       node.y = point.y
       node.vx = 0
       node.vy = 0
-      const next = new Map(positions)
-      next.set(id, { x: node.x, y: node.y })
-      setPositions(next)
+      const next = new Map<string, ForcePoint>()
+      for (const item of simulation) next.set(item.id, { x: item.x, y: item.y })
+      if (onFrameRef.current) onFrameRef.current(next, 1)
+      else setPositions(next)
     },
     release: (id) => {
       if (!enabled) return
-      const node = simulationRef.current?.nodeById.get(id)
-      if (node) node.fixed = false
+      const simulation = simulationRef.current
+      if (!simulation) return
+      const node = simulation.nodeById.get(id)
+      if (!node) return
+      node.fixed = false
+      const next = new Map<string, ForcePoint>()
+      for (const item of simulation) next.set(item.id, { x: item.x, y: item.y })
+      setPositions(next)
+      setSettled(true)
+      onSettleRef.current?.(next)
     },
     reheat: () => {
       if (!enabled || !animate) return
@@ -311,9 +344,15 @@ export function useForceLayout(
         for (let index = 0; index < 2; index += 1) simulation.tick()
         const next = new Map<string, ForcePoint>()
         for (const node of simulation) next.set(node.id, { x: node.x, y: node.y })
-        setPositions(next)
+        if (onFrameRef.current) onFrameRef.current(next, Math.min(1, frame / 25))
+        else setPositions(next)
         if (frame < 25) frameRef.current = requestAnimationFrame(step)
-        else frameRef.current = null
+        else {
+          frameRef.current = null
+          setPositions(next)
+          setSettled(true)
+          onSettleRef.current?.(next)
+        }
       }
       frameRef.current = requestAnimationFrame(step)
     },

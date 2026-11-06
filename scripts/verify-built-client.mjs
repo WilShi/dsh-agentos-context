@@ -16,7 +16,16 @@ const built = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8
 assert.match(built, /data-context-surface/);
 assert.match(built, /communityEdges/);
 assert.match(built, /recallOrder/);
-assert.doesNotMatch(built, /本轮记忆|cytoscape/);
+// The graph stays lazy: cytoscape must never be inlined into the main client
+// bundle, and the lazy loader source keeps its separate graph.js chunk target.
+// Chinese UI copy is legal here because the plugin now ships a complete zh/en
+// dictionary registered through the locale service.
+assert.doesNotMatch(built, /cytoscape/);
+const lazyGraphLoader = await readFile(
+  new URL('../src-client/graph-chunk-loader.ts', import.meta.url),
+  'utf8',
+);
+assert.match(lazyGraphLoader, /bundle\/graph\.js/);
 
 let definition;
 globalThis.window = { __ModuleLoader__: { load(value) { definition = value } } };

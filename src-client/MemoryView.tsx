@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Tag } from './ui-primitives.tsx'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { setActiveTranslator, zhT, type AgentosT } from './i18n.ts'
 import type { ContextApi } from './context-api.ts'
 import type { ContextMemory } from './context-types.ts'
 import { ContextGraph } from './ContextGraph.tsx'
@@ -18,6 +19,7 @@ import {
   useLoad,
 } from './context-ui-helpers.tsx'
 import css from './MemoryView.module.css'
+import { t } from './i18n.ts'
 
 export { groupByDay } from './memory-grouping.ts'
 export type { DayGroup } from './memory-grouping.ts'
@@ -32,13 +34,17 @@ interface ConversationViewProps {
   readonly sessionId: SessionId
   openView(view: string, id?: string): void
 }
-export type MemoryViewFace = ConversationViewProps & { contextApi: ContextApi }
+export type MemoryViewFace = ConversationViewProps & {
+  contextApi: ContextApi
+  /** Locale seat injected by the DSH conversation-view slot registration. */
+  t?: AgentosT
+}
 type OverviewMode = 'list' | 'graph'
 
 function captureLabel(memory: ContextMemory): string {
-  if (memory.legacy) return '历史记忆'
-  if (memory.metadata?.distillState === 'local-fallback') return '本地暂存'
-  if (memory.metadata?.distilledFrom === 'capture') return '自动提炼'
+  if (memory.legacy) return t('memoryView.capture.legacy')
+  if (memory.metadata?.distillState === 'local-fallback') return t('memoryView.capture.localFallback')
+  if (memory.metadata?.distilledFrom === 'capture') return t('memoryView.capture.autoDistilled')
   return sourceLabel(memory)
 }
 
@@ -65,38 +71,38 @@ function MemoryOverviewList({
   )
   const visible = state.data ?? []
   if (state.phase === 'loading' && !state.data)
-    return <div className={css.overviewState}>正在读取记忆列表…</div>
+    return <div className={css.overviewState}>{t('memoryView.list.loading')}</div>
   if (state.error && !state.data)
     return (
       <div className={css.overviewState} role="alert">
         {state.error}
-        <Button onClick={state.reload}>重试</Button>
+        <Button onClick={state.reload}>{t('common.retry')}</Button>
       </div>
     )
   if (!state.data?.length && normalized)
     return (
       <div className={css.emptyState}>
-        <strong>没有找到匹配的记忆</strong>
-        <span>换一个关键词，或清除搜索后查看当前范围的全部记忆。</span>
+        <strong>{t('memoryView.search.empty.title')}</strong>
+        <span>{t('memoryView.search.empty.body')}</span>
       </div>
     )
   if (!state.data?.length)
     return (
       <div className={css.emptyState}>
-        <strong>当前范围还没有记忆</strong>
+        <strong>{t('memoryView.empty.title')}</strong>
         <span>
-          自动记忆开启后，偏好、决定、约束和重要事实会在对话处理中自动整理到这里。
+          {t('memoryView.empty.body')}
         </span>
       </div>
     )
   return (
-    <div className={css.memoryOverview} aria-label="记忆列表">
+    <div className={css.memoryOverview} aria-label={t('aria.memoryList')}>
       <div className={css.memoryOverviewHead}>
-        <span>{normalized ? '搜索结果' : '最近记忆'}</span>
+        <span>{normalized ? t('memoryView.head.searchResults') : t('memoryView.head.recent')}</span>
         <span>
           {normalized
-            ? `${visible.length} / ${totalCount} 条`
-            : `共 ${totalCount} 条${totalCount > state.data.length ? '，打开完整工作台查看更多' : ''}`}
+            ? t('memoryView.count.search', { visible: visible.length, total: totalCount })
+            : t('memoryView.count.total', { count: totalCount }) + (totalCount > state.data.length ? t('memoryView.count.more') : '')}
         </span>
       </div>
       <div className={css.memoryGrid}>
@@ -142,16 +148,16 @@ function MemoryDetail({
     <ContextModal
       open={memory !== null}
       onClose={onClose}
-      title="记忆详情"
+      title={t('memoryView.detail.title')}
       description={
         memory
           ? `${captureLabel(memory)} · ${formatTime(memory.recordedAt)}`
           : undefined
       }
-      closeLabel="关闭"
+      closeLabel={t('common.close')}
       footer={
         <Button variant="primary" onClick={onClose}>
-          完成
+          {t('common.done')}
         </Button>
       }
     >
@@ -162,16 +168,16 @@ function MemoryDetail({
               {memoryKindLabel[memory.kind] ?? memory.kind}
             </Tag>
             <Tag tone={memory.layer === 'working' ? 'warning' : 'info'}>
-              {memoryLayerLabel[memory.layer] ?? memory.layer}记忆
+              {t('memoryView.detail.layer', { layer: memoryLayerLabel[memory.layer] ?? memory.layer })}
             </Tag>
             <Tag tone="outline">
-              重要度 {Math.round((memory.importance ?? 0.5) * 100)}%
+              {t('memoryView.detail.importance', { percent: Math.round((memory.importance ?? 0.5) * 100) })}
             </Tag>
-            {memory.legacy ? <Tag tone="info">旧记忆</Tag> : null}
+            {memory.legacy ? <Tag tone="info">{t('memoryView.detail.legacy')}</Tag> : null}
           </div>
           <p className={css.memoryDetailContent}>{memory.content}</p>
           <section>
-            <h3>来源</h3>
+            <h3>{t('memoryView.detail.source')}</h3>
             <blockquote>{memory.source.content}</blockquote>
             <p>
               {sourceLabel(memory)} · {memory.source.kind}
@@ -179,19 +185,19 @@ function MemoryDetail({
           </section>
           <dl>
             <div>
-              <dt>范围</dt>
+              <dt>{t('memoryView.detail.scope')}</dt>
               <dd>{formatScopeLabel(memory.scopeId, memory.scopeId)}</dd>
             </div>
             <div>
-              <dt>版本</dt>
+              <dt>{t('memoryView.detail.version')}</dt>
               <dd>v{memory.revision}</dd>
             </div>
             <div>
-              <dt>记录时间</dt>
+              <dt>{t('memoryView.detail.recordedAt')}</dt>
               <dd>{formatTime(memory.recordedAt)}</dd>
             </div>
             <div>
-              <dt>状态</dt>
+              <dt>{t('memoryView.detail.status')}</dt>
               <dd>{memory.lifecycle}</dd>
             </div>
           </dl>
@@ -309,7 +315,10 @@ export function MemoryView({
   contextApi,
   sessionId,
   openView,
+  t: localeSeat,
 }: MemoryViewFace) {
+  // Publish the locale seat for the graph/workbench descendants and helpers.
+  setActiveTranslator(localeSeat ?? zhT)
   const surfaceRef = useRef<HTMLElement>(null)
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
   const [mode, setMode] = useState<OverviewMode>('list')
@@ -332,7 +341,7 @@ export function MemoryView({
   const allScope = useMemo(
     () => ({
       id: ALL_SCOPES_ID,
-      label: '全部范围',
+      label: t('scope.all'),
       count: availableScopes.reduce((total, item) => total + item.count, 0),
     }),
     [availableScopes],
@@ -381,45 +390,45 @@ export function MemoryView({
       ref={surfaceRef}
       className={css.overview}
       data-context-surface="conversation"
-      aria-label="记忆概览"
+      aria-label={t('aria.memoryOverview')}
     >
       <header className={css.overviewHeader}>
         <div className={css.overviewTitleBlock}>
-          <h1 className={css.overviewTitle}>记忆</h1>
+          <h1 className={css.overviewTitle}>{t('nav')}</h1>
           <p className={css.overviewSubtitle}>
             {selected
-              ? `正在查看“${formatScopeLabel(selected.id, selected.label)}”中的 ${selected.count} 条记忆${boot.data?.features.capture ? '；自动记忆与实时同步已开启' : ''}`
-              : '查看跨会话记忆与关系图谱'}
+              ? t('memoryView.viewing', { scope: formatScopeLabel(selected.id, selected.label), count: selected.count, a11y: boot.data?.features.capture ? t('memoryView.viewing.captureOn') : '' })
+              : t('memoryView.viewing.subtitle')}
           </p>
         </div>
         <div className={css.overviewActions}>
           {orderedScopes.length ? (
             <select
-              aria-label="记忆范围"
+              aria-label={t('aria.memoryScope')}
               value={scopeId}
               onChange={event => setScopeId(event.currentTarget.value)}
             >
               {orderedScopes.map(scope => (
                 <option value={scope.id} key={scope.id}>
-                  {formatScopeLabel(scope.id, scope.label)} · {scope.count} 条
+                  {t('memoryView.scope.count', { scope: formatScopeLabel(scope.id, scope.label), count: scope.count })}
                 </option>
               ))}
             </select>
           ) : null}
           {mode === 'list' ? (
             <label className={css.overviewSearch}>
-              <span className={css.srOnly}>搜索记忆</span>
+              <span className={css.srOnly}>{t('aria.memorySearch')}</span>
               <input
                 type="search"
-                aria-label="搜索记忆"
-                placeholder="搜索当前记忆"
+                aria-label={t('aria.memorySearch')}
+                placeholder={t('aria.memorySearchPlaceholder')}
                 value={query}
                 onChange={event => setQuery(event.currentTarget.value)}
               />
               {query ? (
                 <button
                   type="button"
-                  aria-label="清除记忆搜索"
+                  aria-label={t('aria.memorySearchClear')}
                   onClick={() => setQuery('')}
                 >
                   ×
@@ -430,7 +439,7 @@ export function MemoryView({
           <div
             className={css.modeSwitch}
             role="tablist"
-            aria-label="记忆显示方式"
+            aria-label={t('aria.memoryDisplayMode')}
           >
             <button
               type="button"
@@ -438,7 +447,7 @@ export function MemoryView({
               aria-selected={mode === 'list'}
               onClick={() => setMode('list')}
             >
-              列表
+              {t('memoryView.tab.list')}
             </button>
             <button
               type="button"
@@ -446,7 +455,7 @@ export function MemoryView({
               aria-selected={mode === 'graph'}
               onClick={() => setMode('graph')}
             >
-              图谱
+              {t('memoryView.tab.graph')}
             </button>
           </div>
           <Button
@@ -454,25 +463,25 @@ export function MemoryView({
             size="sm"
             onClick={() => setWorkbenchOpen(true)}
           >
-            打开完整工作台
+            {t('memoryView.openWorkbench')}
           </Button>
           <Button variant="toolbar" size="sm" onClick={close}>
-            返回对话
+            {t('memoryView.backToChat')}
           </Button>
         </div>
       </header>
       <main className={css.overviewBody}>
         {boot.phase === 'loading' && !boot.data ? (
-          <div className={css.overviewState}>正在读取记忆图谱…</div>
+          <div className={css.overviewState}>{t('memoryView.graph.loading')}</div>
         ) : null}
         {boot.error && !boot.data ? (
           <div className={css.overviewState} role="alert">
             {boot.error}
-            <Button onClick={boot.reload}>重试</Button>
+            <Button onClick={boot.reload}>{t('common.retry')}</Button>
           </div>
         ) : null}
         {boot.data && !scopeId ? (
-          <div className={css.overviewState}>当前没有可用的记忆范围。</div>
+          <div className={css.overviewState}>{t('memoryView.noScope')}</div>
         ) : null}
         {scopeId && mode === 'list' ? (
           <MemoryOverviewList
@@ -500,7 +509,7 @@ export function MemoryView({
       <ContextModal
         open={workbenchOpen}
         onClose={() => setWorkbenchOpen(false)}
-        title="完整记忆工作台"
+        title={t('memoryView.workbench.title')}
         headless
         className={css.workbenchDialog}
       >

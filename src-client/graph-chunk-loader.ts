@@ -6,6 +6,7 @@
  * 并发共享一次加载；失败清缓存允许重试。
  */
 import type cytoscapeType from 'cytoscape'
+import { t } from './i18n.ts'
 
 declare global {
   interface Window {
@@ -26,14 +27,14 @@ export function loadGraphChunk(): Promise<typeof cytoscapeType> {
         el.addEventListener('load', () => { el.remove(); resolve() }, { once: true })
         el.addEventListener('error', () => {
           el.remove()
-          reject(new Error('图谱组件加载失败（/opencontext-api/bundle/graph.js）'))
+          reject(new Error(t('graph.chunk.loadFailed')))
         }, { once: true })
         document.head.append(el)
       })
     }
     const factory = window.__dshChunks__?.graph
     if (typeof factory !== 'function') {
-      throw new Error('图谱 chunk 脚本未注册 factory')
+      throw new Error(t('graph.chunk.notRegistered'))
     }
     const stubRequire = (spec: string): unknown => {
       throw new Error(`graph chunk: unexpected external require('${spec}')`)

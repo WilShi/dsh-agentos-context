@@ -1,4 +1,5 @@
 import { useCallback,useEffect,useRef,useState,useSyncExternalStore } from 'react'
+import { localized, t } from './i18n.ts'
 import type { ContextApi } from './context-api.ts'
 import type { ContextMemory,ContextUsage } from './context-types.ts'
 export type LoadState<T>={ phase:'loading'|'ready'|'error';data:T|null;error:string|null;reload:()=>void }
@@ -39,27 +40,28 @@ export function useLoad<T>(api:ContextRevisionApi,key:string,loader:(signal:Abor
   useEffect(()=>{const c=new AbortController();let live=true;setState(current=>({ phase:'loading',data:current.data,error:null }));loaderRef.current(c.signal).then((data)=>{if(live)setState({ phase:'ready',data,error:null })},(e)=>{if(live&&e?.name!=='AbortError')setState(s=>({ phase:'error',data:s.data,error:e?.message??String(e) }))});return()=>{live=false;c.abort()}},[api,key,revision,tick])
   return{ ...state,reload:useCallback(()=>setTick(x=>x+1),[]) }
 }
-export const memoryKindLabel:Record<string,string>={ fact:'事实',decision:'决策',preference:'偏好',constraint:'约束',outcome:'产出',plan:'计划',note:'记录' }
-export const memoryLayerLabel:Record<string,string>={ working:'工作',episodic:'情节',semantic:'语义',procedural:'程序' }
-export const epistemicLabel:Record<string,string>={ unverified:'待核对',supported:'来源支持',contested:'存在争议',refuted:'已反驳' }
-export const usageLabel:Record<ContextUsage['phase'],string>={ planned:'计划使用',committed:'已加入会话',requested:'已进入模型请求',failed:'未使用' }
+export const memoryKindLabel = localized<'fact'|'decision'|'preference'|'constraint'|'outcome'|'plan'|'note'>('memoryKind')
+export const memoryLayerLabel = localized<'working'|'episodic'|'semantic'|'procedural'>('memoryLayer')
+export const epistemicLabel = localized<'unverified'|'supported'|'contested'|'refuted'>('epistemic')
+export const usageLabel = localized<ContextUsage['phase']>('usage')
+const sourceRoleLabel = localized<'human'|'assistant'|'agent'|'tool'|'unknown'>('source.role')
 function decodedScopePart(id:string,prefix:string):string{
   const value=id.slice(prefix.length)
   try{return decodeURIComponent(value)}catch{return value}
 }
 export function formatScopeLabel(id:string,fallback=''):string{
-  if(id==='dsh-default')return'全局记忆'
-  if(id==='local:default')return'默认工作区'
-  if(id==='legacy:unknown')return'未归类的旧记忆'
-  if(id.startsWith('local:')){const path=id.slice('local:'.length).replace(/[\\/]+$/,'');const leaf=path.split(/[\\/]/).filter(Boolean).at(-1);return leaf?`工作区 · ${leaf}`:'本地工作区'}
-  if(id.startsWith('session:'))return`会话兼容 · ${decodedScopePart(id,'session:')}`
-  const labels={ run:'本次会话',agent:'Agent',user:'用户',app:'应用' } as const
-  for(const kind of Object.keys(labels) as Array<keyof typeof labels>){const prefix=kind+':';if(id.startsWith(prefix))return`${labels[kind]} · ${decodedScopePart(id,prefix)}`}
+  if(id==='dsh-default')return t('scope.global')
+  if(id==='local:default')return t('scope.localDefault')
+  if(id==='legacy:unknown')return t('scope.legacyUnknown')
+  if(id.startsWith('local:')){const path=id.slice('local:'.length).replace(/[\\/]+$/,'');const leaf=path.split(/[\\/]/).filter(Boolean).at(-1);return leaf?t('scope.workspace',{leaf}):t('scope.local')}
+  if(id.startsWith('session:'))return t('scope.session',{id:decodedScopePart(id,'session:')})
+  const labels={ run:t('scope.run'),agent:t('scope.agent'),user:t('scope.user'),app:t('scope.app') } as const
+  for(const kind of Object.keys(labels) as Array<keyof typeof labels>){const prefix=kind+':';if(id.startsWith(prefix))return t('scope.kind',{label:labels[kind],id:decodedScopePart(id,prefix)})}
   return fallback||id
 }
-export function sourceLabel(m:ContextMemory):string{const role={ human:'用户原话',assistant:'模型整理',agent:'Agent记录',tool:'工具结果',unknown:'来源未确认' }[m.source?.actorRole]??'来源未确认';return role+(m.source?.complete?'':' · 片段')}
-export function formatTime(value:number|null|undefined):string{return typeof value==='number'?new Date(value).toLocaleString():'时间未知'}
-export function plainError(error:unknown):string{return error instanceof Error?error.message:'操作未完成'}
+export function sourceLabel(m:ContextMemory):string{const role={ human:t('source.role.human'),assistant:t('source.role.assistant'),agent:t('source.role.agent'),tool:t('source.role.tool'),unknown:t('source.role.unknown') }[m.source?.actorRole]??t('source.role.unknown');return role+(m.source?.complete?'':t('source.excerptSuffix'))}
+export function formatTime(value:number|null|undefined):string{return typeof value==='number'?new Date(value).toLocaleString():t('time.unknown')}
+export function plainError(error:unknown):string{return error instanceof Error?error.message:t('error.operationFailed')}
 /** Minimal structural input for `eventValue`: keeps this helper independent of
  *  the optional @types/react package, which the compiled-plugin tree may omit. */
 export interface ValueChangeEvent{readonly currentTarget:{readonly value:string}}

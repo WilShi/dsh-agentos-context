@@ -29,11 +29,12 @@ import {
 } from './graph-exploration.ts'
 import { ALL_SCOPES_ID } from './context-all-scopes.ts'
 import styles from './Context.module.css'
+import { localized, t } from './i18n.ts'
 
 const LAYERS: MemoryLayer[] = ['working', 'episodic', 'semantic', 'procedural']
-const EDGE_LABEL: Record<string, string> = { summarizes: '摘要归纳', supersedes: '修订', references: '引用', mentions: '提及', source: '来源', session: '同会话', relation: '关系' }
+const EDGE_LABEL = localized<'summarizes'|'supersedes'|'references'|'mentions'|'source'|'session'|'relation'>('graph.edge')
 const GLYPHS: Record<string, string> = { working: '◆', episodic: '●', semantic: '■', procedural: '▲', entity: '◇', document: '▣', source: '○', summary: '✦', community: '◉' }
-const TONE_LABELS: Record<string, string> = { working: '工作记忆', episodic: '情节记忆', semantic: '语义记忆', procedural: '程序记忆', entity: '对象', document: '知识文档', source: '来源证据', summary: '摘要', community: '社区' }
+const TONE_LABELS = localized<'working'|'episodic'|'semantic'|'procedural'|'entity'|'document'|'source'|'summary'|'community'>('graph.tone')
 function nodeTone(node: { type: string; layer?: string; subtype?: string }): string {
   if (node.type !== 'memory') return node.type
   if (node.layer && (LAYERS as string[]).includes(node.layer)) return node.layer
@@ -43,13 +44,8 @@ function nodeTone(node: { type: string; layer?: string; subtype?: string }): str
   if (/conversation|chat|seed/iu.test(subtype)) return 'episodic'
   return 'semantic'
 }
-const typeLabels: Record<string, string> = {
-  memory: '记忆',
-  entity: '对象',
-  document: '知识文档',
-  source: '来源证据',
-  community: '社区',
-}
+const typeLabelMap = localized<'memory'|'entity'|'document'|'source'|'community'>('graph.nodeType')
+const typeLabels: Record<string, string> = new Proxy({} as Record<string, string>, { get: (_target, key) => key === 'memory' ? t('nav') : typeof key === 'string' ? typeLabelMap[key as 'entity'|'document'|'source'|'community'] : undefined })
 const VIEW_WIDTH = 960,
   VIEW_HEIGHT = 500,
   COMMUNITY_THRESHOLD = 12
@@ -247,12 +243,12 @@ function shortLabel(value: string, maxUnits = 18): string {
 }
 function nodeDescriptor(node: VisualNode): string {
   if (node.type === 'community')
-    return `社区 · ${node.community?.size ?? 0} 项`
+    return t('graph.node.communitySize', { count: node.community?.size ?? 0 })
   if (node.type === 'memory')
-    return `${memoryLayerLabel[node.layer ?? 'semantic']}记忆 · ${Math.round((node.importance ?? 0.5) * 100)}%`
-  if (node.type === 'entity') return `对象 · ${node.subtype ?? '未分类'}`
-  if (node.type === 'document') return '知识文档'
-  if (node.type === 'source') return '来源证据'
+    return t('graph.node.memoryLayer', { layer: memoryLayerLabel[node.layer ?? 'semantic'], percent: Math.round((node.importance ?? 0.5) * 100) })
+  if (node.type === 'entity') return t('graph.node.entity', { subtype: node.subtype ?? t('graph.subtype.uncategorized') })
+  if (node.type === 'document') return t('graph.tone.document')
+  if (node.type === 'source') return t('graph.tone.source')
   return `${node.type}${node.subtype ? ` · ${node.subtype}` : ''}`
 }
 function filteredNodeGraph(
@@ -342,7 +338,7 @@ function communityGraph(
             id: 'aggregate:' + key,
             source,
             target,
-            type: '跨社区关联',
+            type: t('graph.crossCommunity'),
             count: 1,
             types: [edge.type],
           }
@@ -512,10 +508,26 @@ export function ContextGraph({
     return Math.max(4, values[Math.min(values.length - 1, Math.floor(values.length * 0.15))] ?? 4)
   }, [degrees])
   const forceEnabled = dimension === '2d' && !showCommunities
+  const livePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const nodeElementRef = useRef(new Map<string, SVGGElement>())
+  const forceAnimatingRef = useRef(false)
+  const applyForceFrame = (next: Map<string, { x: number; y: number }>) => {
+    livePositionsRef.current = next
+    forceAnimatingRef.current = true
+    for (const [id, point] of next) {
+      const element = nodeElementRef.current.get(id)
+      if (!element) continue
+      element.setAttribute('transform', element.dataset.compact === 'true' ? `translate(${point.x},${point.y})` : `translate(${point.x - 64},${point.y - 26})`)
+    }
+  }
+  const settleForce = (next: Map<string, { x: number; y: number }>) => {
+    livePositionsRef.current = next
+    forceAnimatingRef.current = false
+  }
   const force = useForceLayout(
     (graph?.nodes ?? []).map(node => ({ id: node.id, communityId: node.communityId ?? node.community?.id, scopeId: node.scopeId, subcluster: (node.communityId ?? node.community?.id ?? node.scopeId ?? 'all') + ':' + nodeTone(node) })),
     (graph?.edges ?? []).map(edge => ({ source: edge.source, target: edge.target })),
-    { radiusOf: node => radiusById.get(node.id) ?? 10, enabled: forceEnabled },
+    { radiusOf: node => radiusById.get(node.id) ?? 10, enabled: forceEnabled, onFrame: applyForceFrame, onSettle: settleForce },
   )
   const fittedPositions = useMemo(() => {
     const points = [...force.positions.values()]
@@ -573,6 +585,12 @@ export function ContextGraph({
     if (selected?.kind === 'node') keep.add(selected.id)
     return keep
   }, [graph, layerVisible, showCommunities, showAllNodes, degrees, selected])
+  if (!forceAnimatingRef.current) livePositionsRef.current = positions
+  useEffect(() => {
+    if (!force.settled) return
+    livePositionsRef.current = positions
+    forceAnimatingRef.current = false
+  }, [force.settled, positions])
   const firstVisibleNodeId = useMemo(() => {
     const list = (graph?.nodes ?? []).filter(node => node.type !== 'community' && layerVisible(node) && visibleNodeIds.has(node.id))
     return list[0]?.id
@@ -631,7 +649,7 @@ export function ContextGraph({
         const text = raw.includes("scope:") ? raw.slice(raw.indexOf("scope:") + 6) : raw
         try { label = decodeURIComponent(text) } catch { label = text }
       }
-      if (!label || label.length > 16 || label.includes("/")) label = `社区 ${index + 1}`
+      if (!label || label.length > 16 || label.includes("/")) label = t('graph.communityFallback', { index: index + 1 })
       const chipWidth = Array.from(label).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 10 : 6), 0) + 20
       const labelY = minY - 18
       hulls.push({ id, label, count: group.nodes.length, d, x: cx, y: labelY, chipWidth })
@@ -982,22 +1000,22 @@ export function ContextGraph({
       {!overview ? (
         <>
           <details className={styles.graphAdvanced}>
-            <summary>范围与时间{rootId || pending || known || valid || depth !== 2 ? ' · 已设置筛选' : ''}</summary>
+            <summary>{t('graph.filters.summary')}{rootId || pending || known || valid || depth !== 2 ? t('graph.filters.summaryActive') : ''}</summary>
             <div className={styles.toolbar}>
               <input
-                aria-label="图谱中心对象"
-                placeholder="中心节点 ID（可选）"
+                aria-label={t('aria.graphCenter')}
+                placeholder={t('graph.centerPlaceholder')}
                 value={rootId}
                 onChange={event => setRootId(event.currentTarget.value)}
               />
               <select
-                aria-label="展开层数"
+                aria-label={t('aria.expandDepth')}
                 value={depth}
                 onChange={event => setDepth(Number(event.currentTarget.value))}
               >
-                <option value={1}>一层</option>
-                <option value={2}>两层</option>
-                <option value={3}>三层</option>
+                <option value={1}>{t('graph.depth.one')}</option>
+                <option value={2}>{t('graph.depth.two')}</option>
+                <option value={3}>{t('graph.depth.three')}</option>
               </select>
               <label className={styles.inline}>
                 <input
@@ -1006,10 +1024,10 @@ export function ContextGraph({
                   checked={pending}
                   onChange={event => setPending(event.currentTarget.checked)}
                 />
-                显示待确认关系
+                {t('graph.showPending')}
               </label>
               <label className={styles.field}>
-                系统所知时间
+                {t('graph.time.known')}
                 <input
                   type="datetime-local"
                   value={known}
@@ -1017,7 +1035,7 @@ export function ContextGraph({
                 />
               </label>
               <label className={styles.field}>
-                事实生效时间
+                {t('graph.time.valid')}
                 <input
                   type="datetime-local"
                   value={valid}
@@ -1035,16 +1053,16 @@ export function ContextGraph({
                     setValid('')
                   }}
                 >
-                  清除条件
+                  {t('graph.clearConditions')}
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={state.reload}>
-                刷新
+                {t('common.refresh')}
               </Button>
             </div>
           </details>
-          <div className={styles.badges} aria-label="记忆层级图例">
-            <span className={styles.meta}>图例（点击过滤，hover 高亮）：</span>
+          <div className={styles.badges} aria-label={t('aria.layerLegend')}>
+            <span className={styles.meta}>{t('graph.legendHint')}</span>
             {LAYERS.map(layer => (
               <button
                 key={layer}
@@ -1060,7 +1078,7 @@ export function ContextGraph({
                 <span className={styles.legendCount}>{toneCounts[layer] ?? 0}</span>
               </button>
             ))}
-            {([['entity', '对象'], ['document', '知识文档'], ['source', '来源证据'], ['summary', '摘要']] as const).map(([tone, label]) => (
+            {([['entity', t('workbench.mode.entities')], ['document', t('graph.tone.document')], ['source', t('graph.tone.source')], ['summary', t('graph.tone.summary')]] as const).map(([tone, label]) => (
               <span
                 key={tone}
                 className={`${styles.legendChip} ${styles['legend_' + tone] ?? ''}`}
@@ -1072,30 +1090,30 @@ export function ContextGraph({
                 <span className={styles.legendCount}>{toneCounts[tone] ?? 0}</span>
               </span>
             ))}
-            <span className={`${styles.legendChip} ${styles.legend_pending}`}>虚线：待确认</span>
-            {layerFilter !== null ? <button type="button" className={styles.legendChip} onClick={() => setLayerFilter(null)}>清除过滤</button> : null}
+            <span className={`${styles.legendChip} ${styles.legend_pending}`}>{t('graph.legendPending')}</span>
+            {layerFilter !== null ? <button type="button" className={styles.legendChip} onClick={() => setLayerFilter(null)}>{t('graph.clearFilter')}</button> : null}
           </div>
         </>
       ) : (
         <div className={styles.graphOverviewBar}>
           <div>
-            <strong>重点关系概览</strong>
+            <strong>{t('graph.overviewTitle')}</strong>
             <span>
               {showCommunities
-                ? '已按强连接关系折叠为社区；点击社区展开成员。'
-                : '展示最近且关联度较高的节点；选择节点可查看完整内容与来源。'}
+                ? t('graph.overview.community')
+                : t('graph.overview.default')}
             </span>
           </div>
           <Button variant="outline" size="sm" onClick={state.reload}>
-            刷新
+            {t('common.refresh')}
           </Button>
         </div>
       )}
       <div className={styles.graphUtilityBar}>
         <div className={styles.graphSearchBox}>
           <input
-            aria-label="筛选图谱节点"
-            placeholder="搜索节点，按 Enter 定位"
+            aria-label={t('aria.filterNodes')}
+            placeholder={t('graph.searchPlaceholder')}
             value={filter}
             onChange={event => setFilter(event.currentTarget.value)}
             onKeyDown={(event) => {
@@ -1106,15 +1124,15 @@ export function ContextGraph({
           />
           {filter.trim() ? (
             <span aria-live="polite">
-              {graph?.matchedNodeIds.length ?? 0} 个匹配 · Enter 下一个 · Shift+Enter 上一个
+              {t('graph.matches', { count: graph?.matchedNodeIds.length ?? 0 })}
             </span>
           ) : null}
         </div>
         <div className={styles.graphUtilityActions}>
-          {dimension === '2d' ? <div className={styles.graphZoom} role="group" aria-label="图谱缩放">
+          {dimension === '2d' ? <div className={styles.graphZoom} role="group" aria-label={t('aria.graphZoom')}>
             <button
               type="button"
-              aria-label="缩小图谱"
+              aria-label={t('aria.zoomOut')}
               disabled={zoom <= 0.7}
               onClick={() => animateZoom(Math.max(0.7, Number((zoomRef.current - 0.1).toFixed(1))))}
             >
@@ -1122,14 +1140,14 @@ export function ContextGraph({
             </button>
             <button
               type="button"
-              aria-label="重置图谱缩放"
+              aria-label={t('aria.resetZoom')}
               onClick={() => animateZoom(1)}
             >
               {Math.round(zoom * 100)}%
             </button>
             <button
               type="button"
-              aria-label="放大图谱"
+              aria-label={t('aria.zoomIn')}
               disabled={zoom >= 1.4}
               onClick={() => animateZoom(Math.min(1.4, Number((zoomRef.current + 0.1).toFixed(1))))}
             >
@@ -1141,50 +1159,50 @@ export function ContextGraph({
             className={styles.graphFullscreenToggle}
             aria-pressed={fullscreen}
             onClick={() => void toggleFullscreen()}
-          >{fullscreen ? '退出全屏' : '全屏探索'}</button>
+          >{fullscreen ? t('graph.exitFullscreen') : t('graph.fullscreen')}</button>
         </div>
       </div>
       <details className={styles.graphFilters}>
         <summary>
-          筛选与布局
-          {hasVisualFilters ? ' · 已启用' : ''}
+          {t('graph.filters.title')}
+          {hasVisualFilters ? t('graph.filters.active') : ''}
         </summary>
         <div className={styles.graphFilterGrid}>
           <label>
-            节点类型
+            {t('graph.filter.nodeTypes')}
             <select value={nodeType} onChange={event => setNodeType(event.currentTarget.value)}>
-              <option value="all">全部类型</option>
+              <option value="all">{t('graph.filter.allTypes')}</option>
               {nodeTypes.map(type => <option value={type} key={type}>{typeLabels[type] ?? type}</option>)}
             </select>
           </label>
           <label>
-            关系类型
+            {t('graph.filter.edgeTypes')}
             <select value={edgeType} onChange={event => setEdgeType(event.currentTarget.value)}>
-              <option value="all">全部关系</option>
+              <option value="all">{t('graph.filter.allRelations')}</option>
               {edgeTypes.map(type => <option value={type} key={type}>{type}</option>)}
             </select>
           </label>
           <label>
-            数据来源
+            {t('graph.filter.source')}
             <select value={origin} onChange={event => setOrigin(event.currentTarget.value as typeof origin)}>
-              <option value="all">全部来源</option>
-              <option value="current">当前记忆库</option>
-              <option value="legacy">兼容的历史记忆</option>
+              <option value="all">{t('graph.filter.allSources')}</option>
+              <option value="current">{t('graph.filter.currentSource')}</option>
+              <option value="legacy">{t('graph.filter.legacySource')}</option>
             </select>
           </label>
           <label>
-            记忆范围
+            {t('aria.memoryScope')}
             <select value={nodeScope} onChange={event => setNodeScope(event.currentTarget.value)}>
-              <option value="all">全部范围</option>
+              <option value="all">{t('scope.all')}</option>
               {nodeScopes.map(id => <option value={id} key={id}>{formatScopeLabel(id)}</option>)}
             </select>
           </label>
           {dimension === '3d' ? <label>
-            图谱布局
+            {t('graph.filter.layout')}
             <select value={layoutMode} onChange={event => setLayoutMode(event.currentTarget.value as GraphLayoutMode)}>
-              <option value="community">社区聚类</option>
-              <option value="structure">关系结构</option>
-              <option value="timeline">时间脉络</option>
+              <option value="community">{t('graph.layout.community')}</option>
+              <option value="structure">{t('graph.layout.structure')}</option>
+              <option value="timeline">{t('graph.layout.timeline')}</option>
             </select>
           </label> : null}
           {hasVisualFilters ? <button type="button" onClick={() => {
@@ -1193,7 +1211,7 @@ export function ContextGraph({
             setEdgeType('all')
             setOrigin('all')
             setNodeScope('all')
-          }}>清除可视筛选</button> : null}
+          }}>{t('graph.clearVisualFilters')}</button> : null}
         </div>
       </details>
       <div className={styles.graphSwitchRow}>
@@ -1201,7 +1219,7 @@ export function ContextGraph({
           <div
             className={styles.graphViewSwitch}
             role="group"
-            aria-label="图谱显示方式"
+            aria-label={t('aria.displayMode')}
           >
             <button
               type="button"
@@ -1211,7 +1229,7 @@ export function ContextGraph({
                 setSelected(null)
               }}
             >
-              社区视图
+              {t('graph.communityView')}
             </button>
             <button
               type="button"
@@ -1221,85 +1239,85 @@ export function ContextGraph({
                 setSelected(null)
               }}
             >
-              节点视图
+              {t('graph.nodeView')}
             </button>
-            <span>{state.data?.communities?.length ?? 0} 个社区</span>
+            <span>{t('graph.communityCount', { count: state.data?.communities?.length ?? 0 })}</span>
           </div>
         ) : null}
         <div
           className={styles.graphViewSwitch}
           role="group"
-          aria-label="图谱维度"
+          aria-label={t('aria.dimension')}
         >
           <button
             type="button"
             aria-pressed={dimension === '2d'}
             onClick={() => chooseDimension('2d')}
           >
-            2D 实用
+            {t('graph.dimension2d')}
           </button>
           <button
             type="button"
             aria-pressed={dimension === '3d'}
             onClick={() => chooseDimension('3d')}
           >
-            3D 点云
+            {t('graph.dimension3d')}
           </button>
         </div>
       </div>
       {threeError ? (
         <div className={styles.notice} role="status">
-          三维图谱暂不可用，已自动切换为 2D：{threeError}
+          {t('graph.threeUnavailable', { error: threeError })}
         </div>
       ) : null}
       {state.data && graph ? (
         <div className={styles.graphDataStatus} role="status">
           <span>
-            已加载 {state.data.nodes.length} 个节点、{state.data.edges.length} 条关系
+            {t('graph.stats.loaded', { nodes: state.data.nodes.length, edges: state.data.edges.length })}
           </span>
           {showCommunities ? (
             <span>
-              图中聚合显示 {graph.nodes.length} 个社区或节点、{graph.edges.length} 组关系
+              {t('graph.stats.aggregated', { nodes: graph.nodes.length, edges: graph.edges.length })}
             </span>
           ) : hasVisualFilters && (graph.hiddenNodeCount > 0 || graph.hiddenEdgeCount > 0) ? (
             <span>
-              当前筛选显示 {graph.nodes.length} 个节点、{graph.edges.length} 条关系
+              {t('graph.stats.filtered', { nodes: graph.nodes.length, edges: graph.edges.length })}
             </span>
           ) : null}
           {!showCommunities && graph.nodes.length > NODE_RENDER_CAP ? (
             <span className={styles.renderCap}>
-              已渲染 {visibleNodeIds.size}/{graph.nodes.filter(layerVisible).length} 个节点
+              {t('graph.stats.rendered', { rendered: visibleNodeIds.size, total: graph.nodes.filter(layerVisible).length })}
               <button type="button" className={styles.linkButton} onClick={() => setShowAllNodes(value => !value)}>
-                {showAllNodes ? '恢复默认上限（更快）' : '显示全部（可能变慢）'}
+                {showAllNodes ? t('graph.showDefault') : t('graph.showAll')}
               </button>
             </span>
           ) : null}
           {state.data.stats.truncated ? (
             <strong>
-              数据量已达到本次加载上限
+              {t('graph.truncated')}
               {state.data.stats.totalNodeCount
-                ? `（范围内约 ${state.data.stats.totalNodeCount} 个节点）`
-                : '，可通过筛选或中心节点继续探索'}
+                ? t('graph.truncatedHint', { count: state.data.stats.totalNodeCount })
+                : t('graph.exploreHint')}
             </strong>
           ) : (
-            <span>当前范围已完整加载</span>
+            <span>{t('graph.fullyLoaded')}</span>
           )}
         </div>
       ) : null}
       {state.phase === 'loading' && !graph ? (
-        <div className={styles.loading}>正在读取关系图谱…</div>
+        <div className={styles.loading}>{t('graph.loading')}</div>
       ) : null}
       {state.error ? (
         <div className={styles.error} role="alert">
           {state.error}
-          <Button onClick={state.reload}>重试</Button>
+          <Button onClick={state.reload}>{t('common.retry')}</Button>
         </div>
       ) : null}
       {graph && graph.nodes.length === 0 ? (
         <div className={styles.empty}>
           {filter.trim()
-            ? '没有匹配的图谱节点，请更换关键词。'
-            : '当前范围还没有已建立的对象关系。已有记忆仍然保留，可在列表中查看。'}
+            ? t('graph.empty.search')
+            : t('graph.empty.default')}
         </div>
       ) : null}
       {graph && graph.nodes.length > 0 ? (
@@ -1340,7 +1358,7 @@ export function ContextGraph({
                   viewBox={viewBox}
                   preserveAspectRatio="xMidYMid meet"
                   role="img"
-                  aria-label={`当前范围的关系图，展示 ${graph.nodes.length} 个节点和 ${graph.edges.length} 条关系`}
+                  aria-label={t('aria.graphCanvas', { nodes: graph.nodes.length, edges: graph.edges.length })}
                   onClick={(event) => {
                     if (event.target === event.currentTarget) closeSelection()
                   }}
@@ -1391,10 +1409,10 @@ export function ContextGraph({
                           key={edge.id}
                           className={`${styles.edgeHit} ${edgeOnPath ? styles.edgePath : ''} ${edgeDimmed ? styles.edgeDimmed : ''} ${edgeHovered ? styles.edgeHovered : ''}`}
                           onClick={() => setSelected({ kind: 'edge', id: edge.id })}
-                          onMouseEnter={() => setHovered({ kind: 'edge', id: edge.id, x: (x1 + x2) / 2, y: (y1 + y2) / 2, title: EDGE_LABEL[edge.type] ?? edge.type, meta: edge.status === 'pending' ? '待确认关系' : edge.count ? `${edge.count} 条跨社区关系` : '已确认关系' })}
+                          onMouseEnter={() => setHovered({ kind: 'edge', id: edge.id, x: (x1 + x2) / 2, y: (y1 + y2) / 2, title: EDGE_LABEL[edge.type] ?? edge.type, meta: edge.status === 'pending' ? t('graph.edge.pending') : edge.count ? t('graph.edge.crossCommunity', { count: edge.count }) : t('graph.edge.confirmed') })}
                           onMouseLeave={() => setHovered(null)}
                         >
-                          <title>{edge.count ? `${edge.count} 条跨社区关系` : edge.type}</title>
+                          <title>{edge.count ? t('graph.edge.crossCommunity', { count: edge.count }) : edge.type}</title>
                           <path
                             className={edge.status === 'pending' ? `${styles.edge} ${styles.edgePending}` : styles.edge}
                             d={`M${x1} ${y1} Q${(x1 + x2) / 2} ${(y1 + y2) / 2 - 14},${x2} ${y2}`}
@@ -1416,7 +1434,7 @@ export function ContextGraph({
                         </g>
                       ))
                     ) : graph.nodes.filter(node => (showCommunities || node.type !== 'community') && layerVisible(node) && visibleNodeIds.has(node.id)).map((node) => {
-                      const point = positions.get(node.id)
+                      const point = livePositionsRef.current.get(node.id) ?? positions.get(node.id)
                       if (!point) return null
                       const active = selected?.id === node.id
                       const highlightedNode = highlighted.nodeIds.has(node.id)
@@ -1443,18 +1461,18 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                             key={node.id}
                             role="button"
                             tabIndex={0}
-                            aria-label={`${nodeDescriptor(node)}，${displayLabel(node.label)}，${size} 项`}
+                            aria-label={t('graph.node.aria', { descriptor: nodeDescriptor(node), label: displayLabel(node.label), size })}
                             className={`${styles.node} ${styles.communityCluster} ${active ? styles.nodeSelected : ''} ${dimmed ? styles.nodeDimmed : ''}`}
                             transform={`translate(${point.x},${point.y})`}
                             onClick={() => { setViewMode('nodes'); setNodeScope(node.scopeId); setSelected(null) }}
-                            onMouseEnter={() => setHovered({ kind: 'node', id: node.id, ...hoverPercent(point), title: displayLabel(node.label), meta: `${stats.nodes} 个节点 · ${stats.internal} 条内部关系 · ${stats.cross} 条跨社区` })}
+                            onMouseEnter={() => setHovered({ kind: 'node', id: node.id, ...hoverPercent(point), title: displayLabel(node.label), meta: t('graph.node.meta', { nodes: stats.nodes, internal: stats.internal, cross: stats.cross }) })}
                             onMouseLeave={() => setHovered(null)}
                           >
                             {hullPath ? <path className={styles.communityViewHull} d={hullPath} /> : null}
                             {ringPoints.map((point, index) => <circle key={index} className={styles.communityMember} cx={point.x} cy={point.y} r={2.2} />)}
                             <g transform={`translate(0,${clusterRadius * 1.35 + 16})`}>
                               <rect className={styles.communityHullChip} x={-((shortLabel(node.label, 16).length * 5) + 26)} y={-9} width={(shortLabel(node.label, 16).length * 10) + 52} height={18} rx={9} />
-                              <text className={styles.communityHullLabel} textAnchor="middle" y="3.5">{shortLabel(node.label, 16)} · {size} 项</text>
+                              <text className={styles.communityHullLabel} textAnchor="middle" y="3.5">{shortLabel(node.label, 16)} · {t('graph3d.sizeItems', { size })}</text>
                             </g>
                           </g>
                         )
@@ -1463,15 +1481,17 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                         <g
                           key={node.id}
                           role="button"
+                          ref={element => { if (element) nodeElementRef.current.set(node.id, element); else nodeElementRef.current.delete(node.id) }}
                           tabIndex={active || (!selected && node.id === firstVisibleNodeId) ? 0 : -1}
                           data-node-id={node.id}
+                          data-compact={compact2d ? 'true' : 'false'}
                           aria-label={`${nodeDescriptor(node)}，${displayLabel(node.label)}`}
                           className={`${styles.node} ${compact2d ? styles.nodeCompact : ''} ${pulseNodeIds.has(node.id) ? styles.nodeSearchMatch : ''} ${styles['tone_' + tone] ?? ''} ${legendHover !== null && legendHover !== tone ? styles.nodeLegendDim : ''} ${active ? styles.nodeSelected : ''} ${pathNode ? styles.nodePath : ''} ${dimmed ? styles.nodeDimmed : ''}`}
                           transform={compact2d ? `translate(${point.x},${point.y})` : `translate(${point.x - 64},${point.y - 26})`}
                           onPointerDown={event => startDrag(event, node)}
                           onClick={event => selectVisualNode(node, { shiftKey: event.shiftKey })}
                           onDoubleClick={() => selectVisualNode(node, { doubleClick: true })}
-                          onMouseEnter={() => setHovered({ kind: 'node', id: node.id, ...hoverPercent(point), title: displayLabel(node.label), meta: [TONE_LABELS[tone] ?? node.type, node.legacy ? '旧版数据' : null, node.timestamp ? formatTime(node.timestamp) : null].filter(Boolean).join(' · ') })}
+                          onMouseEnter={() => setHovered({ kind: 'node', id: node.id, ...hoverPercent(point), title: displayLabel(node.label), meta: [TONE_LABELS[tone] ?? node.type, node.legacy ? t('graph.node.legacy') : null, node.timestamp ? formatTime(node.timestamp) : null].filter(Boolean).join(' · ') })}
                           onMouseLeave={() => setHovered(null)}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter' || event.key === ' ') {
@@ -1513,7 +1533,7 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                   </g>
                 </svg>
                 {minimap !== null ? (
-                  <svg className={styles.graphMinimap} viewBox={`${minimap.minX} ${minimap.minY} ${minimap.width} ${minimap.height}`} role="img" aria-label="图谱小地图" onPointerDown={moveMinimap} onPointerMove={dragMinimap} onPointerUp={endMinimap} onPointerLeave={endMinimap} onPointerCancel={endMinimap}>
+                  <svg className={styles.graphMinimap} viewBox={`${minimap.minX} ${minimap.minY} ${minimap.width} ${minimap.height}`} role="img" aria-label={t('aria.minimap')} onPointerDown={moveMinimap} onPointerMove={dragMinimap} onPointerUp={endMinimap} onPointerLeave={endMinimap} onPointerCancel={endMinimap}>
                     <rect className={styles.minimapBg} x={minimap.minX} y={minimap.minY} width={minimap.width} height={minimap.height} rx={14} />
                     {minimap.dots.map((dot, index) => <circle key={index} className={styles.minimapDot} data-tone={dot.tone} cx={dot.x} cy={dot.y} r={2.4} />)}
                     <rect ref={minimapViewportRef} className={styles.minimapViewport} x={minimap.viewport.x} y={minimap.viewport.y} width={minimap.viewport.width} height={minimap.viewport.height} rx={6} />
@@ -1530,10 +1550,10 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
               {selected?.kind === 'node' ? (
                 <div className={styles.graphSelectionHint}>
                   {path
-                    ? `已显示最短路径：${path.nodeIds.length} 个节点、${path.edgeIds.length} 条关系`
-                    : '已突出相邻节点；按住 Shift 再点一个节点可查看最短路径'}
+                    ? t('graph.path.shown', { nodes: path.nodeIds.length, edges: path.edgeIds.length })
+                    : t('graph.path.neighbors')}
                   {path ? (
-                    <button type="button" onClick={() => setPath(null)}>清除路径</button>
+                    <button type="button" onClick={() => setPath(null)}>{t('graph.path.clear')}</button>
                   ) : null}
                 </div>
               ) : null}
@@ -1543,23 +1563,23 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                   className={styles.graphFullscreenExit}
                   onClick={() => void toggleFullscreen()}
                 >
-                  退出全屏
+                  {t('graph.exitFullscreen')}
                 </button>
               ) : null}
               {chosenNode || chosenEdge || chosenCommunity ? (
                 <aside
                   className={styles.graphDrawer}
                   role="dialog"
-                  aria-label="图谱详情"
+                  aria-label={t('aria.graphDetails')}
                 >
                   <div className={styles.graphDrawerHeader}>
                     <div>
                       <span className={styles.graphDrawerEyebrow}>
                         {chosenCommunity
-                          ? '社区详情'
+                          ? t('graph.details.community')
                           : chosenNode
-                            ? '节点详情'
-                            : '关系详情'}
+                            ? t('graph.details.node')
+                            : t('graph.details.edge')}
                       </span>
                       <strong>
                         {displayLabel(
@@ -1574,8 +1594,8 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                       className={styles.graphDrawerClose}
                       variant="ghost"
                       size="sm"
-                      aria-label="关闭图谱详情"
-                      title="关闭"
+                      aria-label={t('aria.closeGraphDetails')}
+                      title={t('common.close')}
                       onClick={closeSelection}
                     >
                       <span aria-hidden="true">×</span>
@@ -1585,9 +1605,9 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                     <div className={styles.graphInspectorActions}>
                       {chosenNode ? (
                         <>
-                          <Button size="sm" variant="outline" onClick={() => setFocusNodeId(prev => prev === chosenNode.id ? null : chosenNode.id)}>{focusNodeId === chosenNode.id ? '取消聚焦' : '聚焦邻居'}</Button>
-                          <Button size="sm" variant="outline" onClick={() => setZoom(value => Math.min(2.4, value + 0.25))}>在图谱中打开</Button>
-                          <Button size="sm" variant="ghost" onClick={() => { void navigator.clipboard?.writeText(chosenNode.label) }}>复制</Button>
+                          <Button size="sm" variant="outline" onClick={() => setFocusNodeId(prev => prev === chosenNode.id ? null : chosenNode.id)}>{focusNodeId === chosenNode.id ? t('graph.action.unfocus') : t('graph.action.focusNeighbors')}</Button>
+                          <Button size="sm" variant="outline" onClick={() => setZoom(value => Math.min(2.4, value + 0.25))}>{t('graph.action.openInGraph')}</Button>
+                          <Button size="sm" variant="ghost" onClick={() => { void navigator.clipboard?.writeText(chosenNode.label) }}>{t('common.copy')}</Button>
                         </>
                       ) : null}
                     </div>
@@ -1620,7 +1640,7 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                           closeSelection()
                         }}
                       >
-                        查看此范围节点
+                        {t('graph.action.viewScopeNodes')}
                       </Button>
                     ) : chosenCommunity ? (
                       <Button
@@ -1633,8 +1653,8 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                         }
                       >
                         {expanded.has(chosenCommunity.id)
-                          ? '折叠这个社区'
-                          : '展开社区成员'}
+                          ? t('graph.community.collapse')
+                          : t('graph.community.expand')}
                       </Button>
                     ) : !overview && chosenNode ? (
                       <Button
@@ -1642,7 +1662,7 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                         size="sm"
                         onClick={() => setRootId(chosenNode.id)}
                       >
-                        以此节点为中心展开
+                        {t('graph.action.expandFromNode')}
                       </Button>
                     ) : null}
                   </div>
@@ -1652,10 +1672,10 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
           </div>
           {!overview ? (
             <details className={styles.graphNavigator}>
-              <summary>按列表查找对象、社区或关系</summary>
+              <summary>{t('graph.lookup.summary')}</summary>
               <div className={styles.graphNavigatorFields}>
                 <div className={styles.field}>
-                  <label htmlFor="context-graph-community">社区</label>
+                  <label htmlFor="context-graph-community">{t('graph.tone.community')}</label>
                   <select
                     id="context-graph-community"
                     value={selected?.kind === 'community' ? selected.id : ''}
@@ -1664,16 +1684,16 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                       selectCommunity(event.currentTarget.value)
                     }
                   >
-                    <option value="">选择社区</option>
+                    <option value="">{t('graph.lookup.selectCommunity')}</option>
                     {(state.data?.communities ?? []).map(row => (
                       <option value={row.id} key={row.id}>
-                        {displayLabel(row.label)} · {row.size} 项
+                        {t('graph.lookup.communityOption', { label: displayLabel(row.label), size: row.size })}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div className={styles.field}>
-                  <label htmlFor="context-graph-node">对象</label>
+                  <label htmlFor="context-graph-node">{t('workbench.mode.entities')}</label>
                   <select
                     id="context-graph-node"
                     value={selected?.kind === 'node' ? selected.id : ''}
@@ -1685,19 +1705,19 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                       })
                     }
                   >
-                    <option value="">选择对象</option>
+                    <option value="">{t('graph.lookup.selectNode')}</option>
                     {state.data?.nodes.map(node => (
                       <option value={node.id} key={node.id}>
                         {displayLabel(node.label)} ·{' '}
                         {node.layer
-                          ? `${memoryLayerLabel[node.layer]}记忆`
+                          ? t('workbench.layerMemory', { layer: memoryLayerLabel[node.layer] })
                           : (node.subtype ?? node.type)}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div className={styles.field}>
-                  <label htmlFor="context-graph-edge">关系</label>
+                  <label htmlFor="context-graph-edge">{t('workbench.field.relation')}</label>
                   <select
                     id="context-graph-edge"
                     value={selected?.kind === 'edge' ? selected.id : ''}
@@ -1709,7 +1729,7 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
                       })
                     }
                   >
-                    <option value="">选择关系</option>
+                    <option value="">{t('graph.lookup.selectEdge')}</option>
                     {state.data?.edges.map(edge => (
                       <option value={edge.id} key={edge.id}>
                         {displayLabel(
@@ -1731,12 +1751,12 @@ const showCompactLabel = active || highlightedNode || pathNode || placement !== 
             </details>
           ) : null}
           <div className={styles.graphFootnote}>
-            当前显示 {graph.nodes.length} 个节点、{graph.edges.length} 条关系
+            {t('graph.footer.current', { nodes: graph.nodes.length, edges: graph.edges.length })}
             {showCommunities
-              ? `；共 ${state.data?.communities?.length ?? 0} 个社区，可点击展开或折叠。`
+              ? t('graph.footer.communities', { count: state.data?.communities?.length ?? 0 })
               : ''}
             {graph.truncated
-              ? '；已控制画布节点数量，可通过社区或中心对象继续查看。'
+              ? t('graph.footer.controlled')
               : '。'}
           </div>
         </>
@@ -1775,12 +1795,12 @@ function CommunitySelection({
   return (
     <div className={styles.stack}>
       <div className={styles.badges}>
-        <Tag tone="info">{community.size} 个节点</Tag>
-        <Tag tone="neutral">{community.edgeCount} 条内部关系</Tag>
-        <Tag tone="warning">{community.externalEdgeCount} 条外部联系</Tag>
+        <Tag tone="info">{t('graph.communityStats.nodes', { count: community.size })}</Tag>
+        <Tag tone="neutral">{t('graph.communityStats.internal', { count: community.edgeCount })}</Tag>
+        <Tag tone="warning">{t('graph.communityStats.external', { count: community.externalEdgeCount })}</Tag>
       </div>
       <p className={styles.communitySummary}>{community.summary}</p>
-      <div className={styles.graphDrawerSectionLabel}>主要对象</div>
+      <div className={styles.graphDrawerSectionLabel}>{t('graph.section.topEntities')}</div>
       <div className={styles.communityMembers}>
         {top.map(node => (
           <button
@@ -1796,7 +1816,7 @@ function CommunitySelection({
       </div>
       {links.length ? (
         <>
-          <div className={styles.graphDrawerSectionLabel}>关联社区</div>
+          <div className={styles.graphDrawerSectionLabel}>{t('graph.section.relatedCommunities')}</div>
           <div className={styles.communityMembers}>
             {links.map(({ edge, target }) => (
               <button
@@ -1806,14 +1826,14 @@ function CommunitySelection({
               >
                 {displayLabel(target!.label)}
                 <small>
-                  {edge.count} 条 · {edge.types.join('、')}
+                  {t('graph.edge.countTypes', { count: edge.count, types: edge.types.join(t('common.enumSeparator')) })}
                 </small>
               </button>
             ))}
           </div>
         </>
       ) : null}
-      <div className={styles.graphDrawerSectionLabel}>节点构成</div>
+      <div className={styles.graphDrawerSectionLabel}>{t('graph.section.composition')}</div>
       <dl className={styles.graphDetailList}>
         {Object.entries(community.typeCounts)
           .sort(([a], [b]) => a.localeCompare(b))
@@ -1826,11 +1846,11 @@ function CommunitySelection({
       </dl>
       <dl className={styles.graphDetailList}>
         <div>
-          <dt>记忆范围</dt>
+          <dt>{t('aria.memoryScope')}</dt>
           <dd>{formatScopeLabel(community.scopeId, community.scopeId)}</dd>
         </div>
         <div>
-          <dt>社区 ID</dt>
+          <dt>{t('graph.details.communityId')}</dt>
           <dd className={styles.graphDetailCode}>{community.id}</dd>
         </div>
       </dl>
@@ -1854,13 +1874,13 @@ function MemoryNodeSelection({
       signal => api.memory(memoryScope, memoryId, signal),
     )
   if (state.phase === 'loading' && !state.data)
-    return <div className={styles.loading}>正在读取完整记忆…</div>
+    return <div className={styles.loading}>{t('graph.loading.fullMemory')}</div>
   if (state.error && !state.data)
     return (
       <div className={styles.error} role="alert">
         {state.error}
         <Button size="sm" onClick={state.reload}>
-          重试
+          {t('common.retry')}
         </Button>
       </div>
     )
@@ -1870,33 +1890,33 @@ function MemoryNodeSelection({
     <div className={styles.stack}>
       <div className={styles.badges}>
         <Tag tone={memory.layer === 'working' ? 'warning' : 'info'}>
-          {memoryLayerLabel[memory.layer]}记忆
+          {t('workbench.layerMemory', { layer: memoryLayerLabel[memory.layer] })}
         </Tag>
         <Tag tone="neutral">{memoryKindLabel[memory.kind] ?? memory.kind}</Tag>
-        {memory.legacy ? <Tag tone="info">历史兼容</Tag> : null}
+        {memory.legacy ? <Tag tone="info">{t('graph.legacyCompat')}</Tag> : null}
       </div>
-      <div className={styles.graphDrawerSectionLabel}>完整记忆</div>
+      <div className={styles.graphDrawerSectionLabel}>{t('graph.details.fullMemory')}</div>
       <p className={styles.graphMemoryContent}>{memory.content}</p>
-      <div className={styles.graphDrawerSectionLabel}>来源原文</div>
+      <div className={styles.graphDrawerSectionLabel}>{t('graph.details.sourceText')}</div>
       <blockquote className={styles.source}>{memory.source.content}</blockquote>
       <p className={styles.meta}>
         {sourceLabel(memory)} · {memory.source.kind}
       </p>
       <dl className={styles.graphDetailList}>
         <div>
-          <dt>记录时间</dt>
+          <dt>{t('memoryView.detail.recordedAt')}</dt>
           <dd>{formatTime(memory.recordedAt)}</dd>
         </div>
         <div>
-          <dt>重要度</dt>
+          <dt>{t('graph.details.importance')}</dt>
           <dd>{Math.round((memory.importance ?? 0.5) * 100)}%</dd>
         </div>
         <div>
-          <dt>范围</dt>
+          <dt>{t('memoryView.detail.scope')}</dt>
           <dd>{formatScopeLabel(memory.scopeId, memory.scopeId)}</dd>
         </div>
         <div>
-          <dt>节点 ID</dt>
+          <dt>{t('graph.details.nodeId')}</dt>
           <dd className={styles.graphDetailCode}>{memory.id}</dd>
         </div>
       </dl>
@@ -1939,20 +1959,20 @@ function GraphSelection({
               </Tag>
             ) : null}
           </div>
-          <div className={styles.graphDrawerSectionLabel}>基本信息</div>
+          <div className={styles.graphDrawerSectionLabel}>{t('graph.details.basic')}</div>
           <dl className={styles.graphDetailList}>
             <div>
-              <dt>记录时间</dt>
+              <dt>{t('memoryView.detail.recordedAt')}</dt>
               <dd>
-                {chosen.timestamp ? formatTime(chosen.timestamp) : '时间未知'}
+                {chosen.timestamp ? formatTime(chosen.timestamp) : t('time.unknown')}
               </dd>
             </div>
             <div>
-              <dt>记忆范围</dt>
+              <dt>{t('aria.memoryScope')}</dt>
               <dd>{formatScopeLabel(chosen.scopeId, chosen.scopeId)}</dd>
             </div>
             <div>
-              <dt>节点 ID</dt>
+              <dt>{t('graph.details.nodeId')}</dt>
               <dd className={styles.graphDetailCode}>{chosen.id}</dd>
             </div>
           </dl>
@@ -1960,13 +1980,13 @@ function GraphSelection({
       ) : (
         <>
           <div className={styles.graphDrawerSectionLabel}>
-            {chosen.count ? '跨社区关系' : '关系路径'}
+            {chosen.count ? t('graph.edge.crossCommunityTitle') : t('graph.edge.pathTitle')}
           </div>
           <div className={styles.graphRelationPath}>
             <span>{displayLabel(source?.label ?? chosen.source)}</span>
             <b>
               {chosen.count
-                ? `${chosen.count} 条关系 · ${(chosen.types ?? []).join('、')}`
+                ? t('graph.edge.summary', { count: chosen.count, types: (chosen.types ?? []).join(t('common.enumSeparator')) })
                 : chosen.type}
             </b>
             <span>{displayLabel(target?.label ?? chosen.target)}</span>
@@ -1986,13 +2006,13 @@ function GraphSelection({
           ) : null}
           {chosen.quote ? (
             <div>
-              <div className={styles.meta}>来源摘录</div>
+              <div className={styles.meta}>{t('graph.details.sourceExcerpt')}</div>
               <blockquote className={styles.source}>{chosen.quote}</blockquote>
             </div>
           ) : null}
           <dl className={styles.graphDetailList}>
             <div>
-              <dt>关系 ID</dt>
+              <dt>{t('graph.details.edgeId')}</dt>
               <dd className={styles.graphDetailCode}>{chosen.id}</dd>
             </div>
           </dl>

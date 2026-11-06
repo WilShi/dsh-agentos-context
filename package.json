@@ -1,6 +1,6 @@
 {
   "name": "@wilshi/dsh-agentos-context",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "agentOS context — DSH-native, source-backed memory and ontology workspace (OpenContext compatible; community fork)",
   "type": "module",
   "license": "MIT",

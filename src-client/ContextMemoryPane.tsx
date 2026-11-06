@@ -17,11 +17,12 @@ import {
 } from './context-ui-helpers.tsx'
 import { ContextModal } from './ContextModal.tsx'
 import styles from './Context.module.css'
+import { t, type AgentosContextLocaleKey } from './i18n.ts'
 type PaneTab = 'requested' | 'other' | 'related'
-const PANE_TABS: [PaneTab, string][] = [
-  ['requested', '已进入请求'],
-  ['other', '待处理记录'],
-  ['related', '已存记忆'],
+const PANE_TABS: [PaneTab, AgentosContextLocaleKey][] = [
+  ['requested', 'pane.phase.requested'],
+  ['other', 'pane.phase.other'],
+  ['related', 'pane.phase.related'],
 ]
 export interface ContextMemoryPaneProps {
   api: ContextApi
@@ -195,25 +196,25 @@ export function ContextMemoryPane({
     setSaveOpen(true)
   }
   return (
-    <section className={styles.pane} aria-label="agentOS context 本轮记忆">
+    <section className={styles.pane} aria-label={t('aria.pane')}>
       <header className={styles.paneHeader}>
         <div className={styles.titleRow}>
           <div>
-            <h2 className={styles.title}>本轮记忆</h2>
-            <p className={styles.subtitle}>真实引用记录与本会话使用策略</p>
+            <h2 className={styles.title}>{t('pane.title')}</h2>
+            <p className={styles.subtitle}>{t('pane.subtitle')}</p>
           </div>
           <Button
             variant="toolbar"
             size="sm"
             disabled={busy}
             onClick={onClose}
-            aria-label="关闭记忆"
+            aria-label={t('aria.closeMemory')}
           >
-            关闭
+            {t('common.close')}
           </Button>
         </div>
-        <nav className={styles.tabs} role="tablist" aria-label="本轮记忆分类">
-          {PANE_TABS.map(([id, label], index) => (
+        <nav className={styles.tabs} role="tablist" aria-label={t('aria.paneTabs')}>
+          {PANE_TABS.map(([id, labelKey], index) => (
             <button
               id={'context-pane-tab-' + id}
               aria-controls={'context-pane-panel-' + id}
@@ -245,7 +246,7 @@ export function ContextMemoryPane({
                 )
               }}
             >
-              {label}{' '}
+              {t(labelKey)}{' '}
               {id === 'requested'
                 ? requested.length
                 : id === 'other'
@@ -262,17 +263,17 @@ export function ContextMemoryPane({
         className={styles.paneBody}
       >
         {!boot && !error && (
-          <div className={styles.loading}>正在读取当前会话的记忆记录…</div>
+          <div className={styles.loading}>{t('pane.loading')}</div>
         )}
         {boot && (
           <div className={styles.between}>
-            <span className={styles.meta}>范围：{scope}</span>
+            <span className={styles.meta}>{scope === undefined ? '' : t('pane.scope', { scope })}</span>
             <div className={styles.inline}>
-              <span className={styles.meta}>暂停后续召回</span>
+              <span className={styles.meta}>{t('pane.pauseRecall')}</span>
               <Switch
                 checked={policy?.paused ?? false}
                 disabled={busy}
-                label="暂停后续召回"
+                label={t('pane.pauseRecall')}
                 onChange={paused =>
                   void setPolicyValue({
                     scopeId: scope!,
@@ -288,10 +289,10 @@ export function ContextMemoryPane({
           <>
             {error && (
               <div className={styles.error} role="alert">
-                <b>引用记录暂不可用</b>
+                <b>{t('pane.usageUnavailable')}</b>
                 <div>{error}</div>
                 <Button size="sm" variant="outline" onClick={() => void load()}>
-                  重试
+                  {t('common.retry')}
                 </Button>
               </div>
             )}
@@ -300,8 +301,8 @@ export function ContextMemoryPane({
                 {(view === 'requested' ? requested : other).length === 0 ? (
                   <div className={styles.empty}>
                     {view === 'requested'
-                      ? '当前会话还没有已进入模型请求的记忆快照。'
-                      : '当前没有计划中、已加入会话或失败的记忆记录。'}
+                      ? t('pane.empty.requested')
+                      : t('pane.empty.other')}
                   </div>
                 ) : (
                   (view === 'requested' ? requested : other).map(
@@ -323,7 +324,7 @@ export function ContextMemoryPane({
                             >
                               {usageLabel[usage.phase]}
                             </Tag>
-                            {m.truncated && <Tag tone="warning">片段</Tag>}
+                            {m.truncated && <Tag tone="warning">{t('pane.truncated')}</Tag>}
                           </div>
                           <span className={styles.meta}>v{m.revision}</span>
                         </div>
@@ -345,8 +346,8 @@ export function ContextMemoryPane({
                             }
                           >
                             {policy?.excludedIds.includes(m.id)
-                              ? '恢复候选'
-                              : '下轮不用'}
+                              ? t('pane.action.restoreCandidate')
+                              : t('pane.action.skipNext')}
                           </Button>
                           <Button
                             size="sm"
@@ -364,8 +365,8 @@ export function ContextMemoryPane({
                             }
                           >
                             {policy?.preferredIds.includes(m.id)
-                              ? '取消优先'
-                              : '下轮优先'}
+                              ? t('pane.action.removePriority')
+                              : t('pane.action.prioritize')}
                           </Button>
                         </div>
                       </article>
@@ -380,29 +381,29 @@ export function ContextMemoryPane({
           <div className={styles.stack}>
             {relatedError && (
               <div className={styles.error} role="alert">
-                已存记忆暂不可用：{relatedError}
+                {t('pane.relatedUnavailable', { error: relatedError })}
                 <Button size="sm" variant="outline" onClick={() => void load()}>
-                  重试
+                  {t('common.retry')}
                 </Button>
               </div>
             )}
             {!relatedError &&
               (candidates.length === 0 ? (
-                <div className={styles.empty}>没有其他当前有效记忆。</div>
+                <div className={styles.empty}>{t('pane.empty.related')}</div>
               ) : (
                 candidates.map(m => (
                   <article className={styles.usage} key={m.id}>
                     <div className={styles.between}>
                       <div className={styles.badges}>
-                        <Tag tone="neutral">已保存 · 未引用</Tag>
+                        <Tag tone="neutral">{t('pane.savedNotCited')}</Tag>
                         <Tag tone="outline">{sourceLabel(m)}</Tag>
                       </div>
                       <span className={styles.meta}>v{m.revision}</span>
                     </div>
                     <div className={styles.snapshot}>{m.content}</div>
                     <p className={styles.meta}>
-                      来源：{m.source.kind} ·{' '}
-                      {m.source.complete ? '完整记录' : '片段'}
+                      {t('pane.source', { kind: m.source.kind })} ·{' '}
+                      {m.source.complete ? t('pane.source.complete') : t('pane.truncated')}
                     </p>
                     <div className={styles.actions}>
                       <Button
@@ -421,8 +422,8 @@ export function ContextMemoryPane({
                         }
                       >
                         {policy?.preferredIds.includes(m.id)
-                          ? '取消下轮优先'
-                          : '下轮优先'}
+                          ? t('pane.action.unprioritize')
+                          : t('pane.action.prioritize')}
                       </Button>
                     </div>
                   </article>
@@ -434,22 +435,22 @@ export function ContextMemoryPane({
       <footer className={styles.paneFooter}>
         <div className={styles.actions}>
           <Button variant="outline" onClick={openSave}>
-            记住一条
+            {t('pane.action.remember')}
           </Button>
           <Button variant="primary" onClick={onManage}>
-            管理全部记忆
+            {t('pane.action.manageAll')}
           </Button>
         </div>
         <p className={styles.hint}>
-          计划使用不代表已进入模型请求；暂停不会删除记忆或已发送上下文。
+          {t('pane.hint.planning')}
         </p>
       </footer>
       <ContextModal
         open={saveOpen}
         onClose={() => !busy && setSaveOpen(false)}
-        title="记住一条"
-        description="保存到当前会话范围；保存不等于事实已经证实。"
-        closeLabel="关闭"
+        title={t('pane.action.remember')}
+        description={t('pane.remember.description')}
+        closeLabel={t('common.close')}
         footer={
           <div className={styles.actions}>
             <Button
@@ -457,21 +458,21 @@ export function ContextMemoryPane({
               onClick={() => setSaveOpen(false)}
               disabled={busy}
             >
-              取消
+              {t('common.cancel')}
             </Button>
             <Button
               variant="primary"
               onClick={() => void save()}
               disabled={busy || !content.trim()}
             >
-              {busy ? '保存中…' : '保存'}
+              {busy ? t('common.saving') : t('common.save')}
             </Button>
           </div>
         }
       >
         <div className={styles.modalContent}>
           <div className={styles.field}>
-            <label htmlFor="context-pane-content">内容</label>
+            <label htmlFor="context-pane-content">{t('pane.field.content')}</label>
             <textarea
               id="context-pane-content"
               value={content}

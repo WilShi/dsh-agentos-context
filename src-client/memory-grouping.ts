@@ -2,6 +2,8 @@
  * memory-grouping — MemoryView 按日分组的纯函数核（从 MemoryView.tsx 拆出，
  * 便于脱离 react/CSS-Modules 导入链直接做单测）。
  */
+import { t } from './i18n.ts'
+
 interface MemoryItem { timestamp?: number; [key: string]: unknown }
 
 export interface DayGroup {
@@ -10,15 +12,15 @@ export interface DayGroup {
 }
 
 export function dayLabel(timestamp: number | undefined): string {
-  if (timestamp === undefined) return '未知时间'
+  if (timestamp === undefined) return t('time.dayUnknown')
   const date = new Date(timestamp)
   const today = new Date()
   const yesterday = new Date(today)
   yesterday.setDate(today.getDate() - 1)
   const sameDay = (a: Date, b: Date) =>
     a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-  if (sameDay(date, today)) return '今天'
-  if (sameDay(date, yesterday)) return '昨天'
+  if (sameDay(date, today)) return t('time.today')
+  if (sameDay(date, yesterday)) return t('time.yesterday')
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 

@@ -4,6 +4,7 @@ import type { ContextApi } from './context-api.ts'
 import type { ContextRelation } from './context-types.ts'
 import { plainError, useLoad, useMutationGuard } from './context-ui-helpers.tsx'
 import styles from './Context.module.css'
+import { t } from './i18n.ts'
 
 export function ContextReview({ api, scopeId }: { api: ContextApi; scopeId: string }) {
   const state = useLoad(api, 'reviews:' + scopeId, signal => api.reviews(scopeId, signal))
@@ -25,7 +26,7 @@ export function ContextReview({ api, scopeId }: { api: ContextApi; scopeId: stri
     () => new Map((schemaState.data?.relations ?? []).map(relation => [relation.id, relation.label])),
     [schemaState.data],
   )
-  const entityLabel = (id: string) => names.get(id) ?? `对象 ${id.slice(0, 8)}`
+  const entityLabel = (id: string) => names.get(id) ?? t('review.entity', { id: id.slice(0, 8) })
   const predicateLabel = (id: string) => predicates.get(id) ?? id.replaceAll('_', ' ')
   useEffect(() => {
     if (selected && !state.data?.some(item => item.id === selected.id)) setSelected(null)
@@ -52,31 +53,31 @@ export function ContextReview({ api, scopeId }: { api: ContextApi; scopeId: stri
       setBusy(false)
     }
   }
-  if (state.phase === 'loading' && !state.data) return <div className={styles.loading}>正在读取待确认关系…</div>
-  if (state.error && !state.data) return <div className={styles.error} role="alert">{state.error}<Button onClick={state.reload}>重试</Button></div>
+  if (state.phase === 'loading' && !state.data) return <div className={styles.loading}>{t('review.loading')}</div>
+  if (state.error && !state.data) return <div className={styles.error} role="alert">{state.error}<Button onClick={state.reload}>{t('common.retry')}</Button></div>
   const items = state.data ?? []
-  if (!items.length) return <div className={styles.empty}>当前没有待确认关系。模型提取出的新关系会先进入这里，不会未经确认直接当作事实使用。</div>
+  if (!items.length) return <div className={styles.empty}>{t('review.empty')}</div>
   return <div className={styles.review}>
-    <nav className={styles.reviewQueue} aria-label="待确认关系">
+    <nav className={styles.reviewQueue} aria-label={t('aria.reviewQueue')}>
       {items.map(item => <button className={styles.reviewCard + ' ' + (selected?.id === item.id ? styles.reviewCardActive : '')} key={item.id} onClick={() => { setSelected(item); setReason('') }}>
-        <div className={styles.badges}><Tag tone="warning">待确认</Tag><Tag tone="neutral">{predicateLabel(item.predicate)}</Tag></div>
+        <div className={styles.badges}><Tag tone="warning">{t('review.badge.pending')}</Tag><Tag tone="neutral">{predicateLabel(item.predicate)}</Tag></div>
         <div className={styles.itemTitle}>{entityLabel(item.subjectId)} → {entityLabel(item.objectId)}</div>
-        <div className={styles.meta}>第 {item.revision} 版 · {item.sourceId ? '有原文证据' : '缺少来源'}</div>
+        <div className={styles.meta}>{t('review.meta.revision', { revision: item.revision })} · {item.sourceId ? t('review.meta.hasEvidence') : t('review.meta.missingSource')}</div>
       </button>)}
     </nav>
     <section className={styles.panel}>{selected && <div className={styles.stack}>
-      <div className={styles.between}><h3 className={styles.sectionTitle}>核对这条关系</h3><Tag tone="warning">等待人工确认</Tag></div>
+      <div className={styles.between}><h3 className={styles.sectionTitle}>{t('review.section.verify')}</h3><Tag tone="warning">{t('review.badge.awaitingHuman')}</Tag></div>
       <div className={styles.reviewPath}>
         <span>{entityLabel(selected.subjectId)}</span>
         <b>{predicateLabel(selected.predicate)}</b>
         <span>{entityLabel(selected.objectId)}</span>
       </div>
-      <div><div className={styles.graphDrawerSectionLabel}>支持这条关系的原文</div><p className={styles.source}>{selected.quote || '当前没有原文片段；这条关系只能驳回，不能确认。'}</p></div>
-      <div className={styles.field}><label htmlFor="review-reason">处理说明</label><div className={styles.reviewQuickReasons}><button type="button" onClick={() => setReason('原文与关系方向一致。')}>原文一致</button><button type="button" onClick={() => setReason('原文不足以支持这条关系。')}>证据不足</button></div><textarea id="review-reason" placeholder="说明确认或驳回的依据" value={reason} onChange={event => setReason(event.currentTarget.value)} disabled={busy}/></div>
+      <div><div className={styles.graphDrawerSectionLabel}>{t('review.section.evidence')}</div><p className={styles.source}>{selected.quote || t('review.noQuote')}</p></div>
+      <div className={styles.field}><label htmlFor="review-reason">{t('review.reason.label')}</label><div className={styles.reviewQuickReasons}><button type="button" onClick={() => setReason(t('review.reason.quickMatchValue'))}>{t('review.reason.quickMatch')}</button><button type="button" onClick={() => setReason(t('review.reason.quickInsufficientValue'))}>{t('review.reason.quickInsufficient')}</button></div><textarea id="review-reason" placeholder={t('review.reason.placeholder')} value={reason} onChange={event => setReason(event.currentTarget.value)} disabled={busy}/></div>
       {error && <p className={styles.errorText}>{error}</p>}
-      <div className={styles.actions}><Button variant="primary" disabled={busy || !reason.trim() || !selected.sourceId || !selected.quote} onClick={() => void decide('confirm')}>确认关系</Button><Button variant="outline" disabled={busy || !reason.trim()} onClick={() => void decide('reject')}>驳回</Button></div>
-      <p className={styles.hint}>确认表示“这段原文支持该关系”，不代表它永远正确；后续仍可根据新证据修订。</p>
-      <details className={styles.technicalDetails}><summary>技术信息</summary><dl><div><dt>主语 ID</dt><dd>{selected.subjectId}</dd></div><div><dt>关系字段</dt><dd>{selected.predicate}</dd></div><div><dt>宾语 ID</dt><dd>{selected.objectId}</dd></div><div><dt>来源 ID</dt><dd>{selected.sourceId ?? '无'}</dd></div></dl></details>
+      <div className={styles.actions}><Button variant="primary" disabled={busy || !reason.trim() || !selected.sourceId || !selected.quote} onClick={() => void decide('confirm')}>{t('review.action.confirm')}</Button><Button variant="outline" disabled={busy || !reason.trim()} onClick={() => void decide('reject')}>{t('review.action.reject')}</Button></div>
+      <p className={styles.hint}>{t('review.hint')}</p>
+      <details className={styles.technicalDetails}><summary>{t('review.technical.summary')}</summary><dl><div><dt>{t('review.technical.subject')}</dt><dd>{selected.subjectId}</dd></div><div><dt>{t('review.technical.predicate')}</dt><dd>{selected.predicate}</dd></div><div><dt>{t('review.technical.object')}</dt><dd>{selected.objectId}</dd></div><div><dt>{t('review.technical.source')}</dt><dd>{selected.sourceId ?? t('common.none')}</dd></div></dl></details>
     </div>}</section>
   </div>
 }

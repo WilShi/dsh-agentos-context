@@ -12,6 +12,7 @@ import type {
   ContextRelation,
 } from './context-types.ts'
 import { formatScopeLabel } from './context-ui-helpers.tsx'
+import { t } from './i18n.ts'
 
 /** UI-only scope used to browse every durable scope without changing recall. */
 export const ALL_SCOPES_ID = 'agentos-context:all-scopes'
@@ -131,7 +132,7 @@ function mergeGraphs(graphs: ContextGraph[], limit = 2000): ContextGraph {
       return {
         id: scopeCommunityId(scopeId),
         label: formatScopeLabel(scopeId, scopeId),
-        summary: `聚合这个范围内的 ${members.length} 个节点和 ${internalEdges.length} 条关系。`,
+        summary: t('graph.allScopesSummary', { nodes: members.length, edges: internalEdges.length }),
         nodeIds: members.map(node => node.id),
         size: members.length,
         edgeCount: internalEdges.length,
@@ -235,7 +236,7 @@ export function withAllScopes(api: ContextApi, inputScopeIds: string[]): Context
         (result): result is PromiseFulfilledResult<ContextMemory> => result.status === 'fulfilled',
       )
       if (hit) return hit.value
-      throw new Error('没有找到这条记忆。')
+      throw new Error(t('memory.notFound'))
     },
     versions: async (scopeId, id, signal) => {
       if (!all(scopeId)) return api.versions(scopeId, id, signal)
